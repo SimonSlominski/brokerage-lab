@@ -16,7 +16,14 @@ from sqlalchemy import (
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
-from brokerage_lab.domain import Account, BusinessStatus, CommunicationStatus, Money, Order, Reservation
+from brokerage_lab.domain import (
+    Account,
+    BusinessStatus,
+    CommunicationStatus,
+    Money,
+    Order,
+    Reservation,
+)
 
 
 class Base(DeclarativeBase):

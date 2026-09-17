@@ -9,7 +9,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from brokerage_lab.api import create_app
-from brokerage_lab.db import AccountRow, OrderRow, ReservationRow, load_account, order_from_row, order_to_row
+from brokerage_lab.db import (
+    AccountRow,
+    OrderRow,
+    ReservationRow,
+    load_account,
+    order_from_row,
+    order_to_row,
+)
 from brokerage_lab.demo import DEMO_ACCOUNT_ID, reset_demo, seed_demo
 from brokerage_lab.domain import Order
 

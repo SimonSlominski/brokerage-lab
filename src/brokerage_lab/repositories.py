@@ -4,7 +4,13 @@ from typing import Protocol
 
 from sqlalchemy.orm import Session
 
-from brokerage_lab.db import AccountRow, OrderRow, load_account, order_from_row, order_to_row
+from brokerage_lab.db import (
+    AccountRow,
+    OrderRow,
+    load_account,
+    order_from_row,
+    order_to_row,
+)
 from brokerage_lab.domain import Account, Order
 
 

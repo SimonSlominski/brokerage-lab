@@ -8,7 +8,13 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from brokerage_lab.config import Settings
-from brokerage_lab.db import AccountRow, InstrumentRow, OrderRow, ReservationRow, make_engine
+from brokerage_lab.db import (
+    AccountRow,
+    InstrumentRow,
+    OrderRow,
+    ReservationRow,
+    make_engine,
+)
 from brokerage_lab.domain import DEMO_INSTRUMENT, DEMO_UNIT_PRICE
 
 DEMO_ACCOUNT_ID = "demo-account"
