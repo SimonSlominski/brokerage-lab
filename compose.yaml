@@ -1,0 +1,43 @@
+name: brokerage-lab
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: brokerage
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: brokerage_lab
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brokerage -d brokerage_lab"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  api:
+    image: brokerage-lab-local
+    build: .
+    command: ["uvicorn", "brokerage_lab.api:create_app", "--factory", "--reload", "--reload-dir", "/app/src", "--host", "0.0.0.0", "--port", "8000"]
+    volumes:
+      - ./src:/app/src:ro
+      - ./migrations:/app/migrations
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql+psycopg://brokerage:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/brokerage_lab
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      interval: 5s
+      timeout: 4s
+      start_period: 10s
+      retries: 12
+
+volumes:
+  postgres_data:
