@@ -1,6 +1,6 @@
 # Brokerage Lab
 
-A local proof of concept for reliable investment order processing. The current increment includes an immutable Pydantic domain model, a read-only FastAPI demo, SQLAlchemy mappings and PostgreSQL migrations.
+A local proof of concept for reliable investment order processing. The current increment includes an immutable Pydantic domain model, a local FastAPI order demo, SQLAlchemy mappings and PostgreSQL migrations.
 
 The main question is: **Did the execution partner accept the order?** A lost response must not become a fabricated rejection or release reserved cash.
 
@@ -10,7 +10,7 @@ The main question is: **Did the execution partner accept the order?** A lost res
 - Account and Order enforce reservation and state transition rules through immutable domain operations.
 - PostgreSQL contains accounts, instruments, orders and cash reservations, created through Alembic.
 - The demo account starts with 1000.00 EUR; the synthetic instrument costs 100.00 EUR per whole unit.
-- FastAPI exposes liveness, database readiness and the known demo account. There is no public order submission or general account browsing yet. Account authorization and transactional submission are later T1 work.
+- FastAPI exposes health checks, the known demo account, local order submission and order reads. Order creation reserves cash atomically; multi-client authentication and request idempotency remain future work.
 - Worker, external partner simulation, ledger and reconciliation remain planned components.
 
 ## Start the entire application
@@ -40,6 +40,20 @@ To stop the stack while preserving the database:
 ```bash
 docker compose down
 ```
+
+## Local order demo
+
+In Swagger, submit POST /demo/orders with:
+
+```json
+{"quantity": 8}
+```
+
+For a fresh 1000.00 EUR demo account, expect HTTP 201, PENDING / NOT_SENT and a reservation of 800.00 EUR. GET /demo/account then shows 1000.00 posted, 800.00 reserved and 200.00 available. Follow the response Location header or GET /demo/orders/{order_id} to read the order.
+
+A subsequent order with quantity 3 returns HTTP 409 and "Insufficient available cash", leaving existing records unchanged. Invalid quantities or unsupported currency/instrument/side return 422. The only supported terms are BUY, SYNTH-100, EUR and 100.00 per whole unit. Account IDs and prices cannot be supplied by the client.
+
+This creates a local order, not a partner execution. Requests are not yet idempotent: resending the same request may create another order if funds permit. A database connection failure during commit can leave the outcome unknown; a 503 response is not a definitive business rejection. The account lock serializes concurrent submissions through this service, not arbitrary SQL writers.
 
 ## Edit code while Docker is running
 
@@ -139,7 +153,7 @@ The demo account endpoint calls services.py, which reads through repositories.py
 
 Repository add flushes SQL but never commits. Call uow.commit() explicitly to make writes durable. Leaving the context without commit rolls back, even on normal exit. An exception before commit rolls back all writes in that transaction. An exception after successful commit cannot undo it. Each Unit of Work instance is single-use and closes its session on exit.
 
-The current account repository inserts initial accounts without reservations; the order repository inserts orders without reserving cash. These are persistence primitives, not a public submission workflow. Atomic reservation and account ownership remain the next increment.
+The submission service locks the account before checking cash, then inserts the order and reservation in one Unit of Work. Repositories never commit independently. The HTTP demo always uses demo-account and does not expose other accounts. This fixed demo scope is not multi-client authorization.
 
 ## First Git checkpoint
 

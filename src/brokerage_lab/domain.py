@@ -34,6 +34,10 @@ class DomainError(ValueError):
     """An operation violates a business rule."""
 
 
+class InsufficientFundsError(DomainError):
+    """The account cannot cover an additional reservation."""
+
+
 class DomainModel(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
@@ -221,7 +225,7 @@ class Account(DomainModel):
         if any(item.order_id == order.id for item in self.reservations):
             raise DomainError("Order already has a reservation")
         if order.reservation_amount.amount > self.available_cash.amount:
-            raise DomainError("Insufficient available cash")
+            raise InsufficientFundsError("Insufficient available cash")
         reservation = Reservation(order_id=order.id, amount=order.reservation_amount)
         return self._evolve(reservations=(*self.reservations, reservation))
 

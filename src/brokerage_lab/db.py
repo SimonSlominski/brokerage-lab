@@ -101,8 +101,19 @@ def make_engine(url: str) -> Engine:
     return create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 3})
 
 
-def load_account(session: Session, account_id: str) -> Account | None:
-    row = session.get(AccountRow, account_id)
+def load_account(
+    session: Session, account_id: str, *, for_update: bool = False
+) -> Account | None:
+    if for_update:
+        # Serialize cash decisions for this account before reading reservations.
+        row = session.scalar(
+            select(AccountRow)
+            .where(AccountRow.id == account_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    else:
+        row = session.get(AccountRow, account_id)
     if row is None:
         return None
     reservations = session.scalars(

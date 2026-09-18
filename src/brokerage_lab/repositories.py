@@ -7,16 +7,21 @@ from sqlalchemy.orm import Session
 from brokerage_lab.db import (
     AccountRow,
     OrderRow,
+    ReservationRow,
     load_account,
     order_from_row,
     order_to_row,
 )
-from brokerage_lab.domain import Account, Order
+from brokerage_lab.domain import Account, Order, Reservation
 
 
 class AccountRepository(Protocol):
     def get(self, account_id: str) -> Account | None: ...
     def add(self, account: Account) -> None: ...
+    def get_for_update(self, account_id: str) -> Account | None: ...
+    def add_reservation(
+        self, account_id: str, reservation: Reservation
+    ) -> None: ...
 
 
 class OrderRepository(Protocol):
@@ -31,10 +36,29 @@ class SqlAlchemyAccountRepository:
     def get(self, account_id: str) -> Account | None:
         return load_account(self._session, account_id)
 
+    def get_for_update(self, account_id: str) -> Account | None:
+        return load_account(self._session, account_id, for_update=True)
+
+    def add_reservation(
+        self, account_id: str, reservation: Reservation
+    ) -> None:
+        """Persist a validated reservation while the caller holds its account lock."""
+        self._session.add(
+            ReservationRow(
+                order_id=reservation.order_id,
+                account_id=account_id,
+                amount=reservation.amount.amount,
+                currency=reservation.amount.currency,
+            )
+        )
+        self._session.flush()
+
     def add(self, account: Account) -> None:
         """Insert an initial account, not an update or reservation operation."""
         if account.reservations:
-            raise ValueError("New accounts must not contain existing reservations")
+            raise ValueError(
+                "New accounts must not contain existing reservations"
+            )
         self._session.add(
             AccountRow(
                 id=account.id,
