@@ -1,0 +1,36 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>Brokerage Lab — Failure Laboratory</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{font:16px system-ui;background:#f5f6fa;color:#15243a;max-width:1100px;margin:40px auto;padding:20px}
+h1{font-size:36px} button{background:#194ed5;color:white;border:0;border-radius:6px;padding:12px;margin:4px;cursor:pointer}
+details,section{background:white;padding:16px;margin:12px 0;border:1px solid #d7dfeb;border-radius:8px}
+summary{cursor:pointer;font-weight:600} pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}
+.badge{color:#6d4e00;background:#fff2c3;padding:6px} #progress{min-height:24px}
+</style><h1>Failure Laboratory</h1>
+<p>Did the partner execute the order? Inspect durable evidence, not assumptions.</p>
+<p class="badge">Local simulator · EUR BUY only · no real trading</p>
+<section><h2>Run a controlled failure</h2><p>Each run creates a fresh funded account.
+Existing history is retained. Mismatch uses explicitly labelled report fixtures.</p>
+$buttons<p id="progress"></p></section>
+<section><h2>Observed metrics</h2><p>Source: local PostgreSQL, current page request.</p>
+<pre>$counters</pre></section>
+<h2>Scenario evidence</h2>$runs
+<h2>Orders and timelines</h2>$orders
+<h2>Reconciliation cases</h2>$cases
+<script>
+async function run(scenario) {
+ document.getElementById('progress').textContent='RUNNING: '+scenario;
+ document.querySelectorAll('button').forEach(b=>b.disabled=true);
+ try {
+  const response=await fetch('/lab/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario,seed:42})});
+  const result=await response.json();
+  if(!response.ok) throw new Error(result.detail || 'Request failed');
+  document.getElementById('progress').textContent=result.status+' · '+result.run_id;
+  location.reload();
+ } catch(error) {
+  document.getElementById('progress').textContent='FAILED: '+error.message;
+  document.querySelectorAll('button').forEach(b=>b.disabled=false);
+ }
+}
+</script></html>
