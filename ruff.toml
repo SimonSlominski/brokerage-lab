@@ -1,0 +1,17 @@
+# Aiperia conventions with the requested 79-character limit.
+line-length = 79
+indent-width = 4
+target-version = "py311"
+show-fixes = true
+
+[lint]
+select = ["E", "F", "I"]
+ignore = []
+fixable = ["ALL"]
+unfixable = []
+
+[format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
