@@ -1,4 +1,4 @@
-"""Small persistence contracts and SQLAlchemy adapters; repositories never commit."""
+"""Persistence contracts and SQLAlchemy adapters; no implicit commits."""
 
 from typing import Protocol
 
@@ -16,9 +16,13 @@ from brokerage_lab.domain import Account, Order, Reservation
 
 
 class AccountRepository(Protocol):
-    def get(self, account_id: str) -> Account | None: ...
+    def get(
+        self, account_id: str, *, owner_client_id: str | None = None
+    ) -> Account | None: ...
     def add(self, account: Account) -> None: ...
-    def get_for_update(self, account_id: str) -> Account | None: ...
+    def get_for_update(
+        self, account_id: str, *, owner_client_id: str | None = None
+    ) -> Account | None: ...
     def add_reservation(
         self, account_id: str, reservation: Reservation
     ) -> None: ...
@@ -33,16 +37,27 @@ class SqlAlchemyAccountRepository:
     def __init__(self, session: Session):
         self._session = session
 
-    def get(self, account_id: str) -> Account | None:
-        return load_account(self._session, account_id)
+    def get(
+        self, account_id: str, *, owner_client_id: str | None = None
+    ) -> Account | None:
+        return load_account(
+            self._session, account_id, owner_client_id=owner_client_id
+        )
 
-    def get_for_update(self, account_id: str) -> Account | None:
-        return load_account(self._session, account_id, for_update=True)
+    def get_for_update(
+        self, account_id: str, *, owner_client_id: str | None = None
+    ) -> Account | None:
+        return load_account(
+            self._session,
+            account_id,
+            for_update=True,
+            owner_client_id=owner_client_id,
+        )
 
     def add_reservation(
         self, account_id: str, reservation: Reservation
     ) -> None:
-        """Persist a validated reservation while the caller holds its account lock."""
+        """Persist a reservation while the caller holds its account lock."""
         self._session.add(
             ReservationRow(
                 order_id=reservation.order_id,
@@ -54,7 +69,7 @@ class SqlAlchemyAccountRepository:
         self._session.flush()
 
     def add(self, account: Account) -> None:
-        """Insert an initial account, not an update or reservation operation."""
+        """Insert an initial account without reservations."""
         if account.reservations:
             raise ValueError(
                 "New accounts must not contain existing reservations"
@@ -78,6 +93,6 @@ class SqlAlchemyOrderRepository:
         return None if row is None else order_from_row(row)
 
     def add(self, order: Order) -> None:
-        """Insert an order inside the caller's transaction; does not reserve cash."""
+        """Insert an order inside the caller transaction."""
         self._session.add(order_to_row(order))
         self._session.flush()

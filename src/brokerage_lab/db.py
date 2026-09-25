@@ -33,11 +33,18 @@ class Base(DeclarativeBase):
 class AccountRow(Base):
     __tablename__ = "accounts"
     __table_args__ = (
-        CheckConstraint("posted_cash >= 0", name="ck_accounts_cash_nonnegative"),
+        CheckConstraint(
+            "posted_cash >= 0", name="ck_accounts_cash_nonnegative"
+        ),
         CheckConstraint("currency = 'EUR'", name="ck_accounts_currency"),
     )
     id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    posted_cash: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
+    owner_client_id: Mapped[str] = mapped_column(
+        String(100), nullable=False, server_default="unassigned"
+    )
+    posted_cash: Mapped[Decimal] = mapped_column(
+        Numeric(20, 2), nullable=False
+    )
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
 
 
@@ -45,7 +52,8 @@ class InstrumentRow(Base):
     __tablename__ = "instruments"
     __table_args__ = (
         CheckConstraint(
-            "id = 'SYNTH-100' AND unit_price = 100.00 AND currency = 'EUR'", name="ck_instruments_demo"
+            "id = 'SYNTH-100' AND unit_price = 100.00 AND currency = 'EUR'",
+            name="ck_instruments_demo",
         ),
     )
     id: Mapped[str] = mapped_column(String(100), primary_key=True)
@@ -57,40 +65,63 @@ class OrderRow(Base):
     __tablename__ = "orders"
     __table_args__ = (
         UniqueConstraint("id", "account_id", name="uq_orders_id_account"),
-        CheckConstraint("quantity > 0 AND quantity <= 9999999999999999", name="ck_orders_quantity"),
         CheckConstraint(
-            "side = 'BUY' AND currency = 'EUR' AND unit_price = 100.00", name="ck_orders_demo_terms"
+            "quantity > 0 AND quantity <= 9999999999999999",
+            name="ck_orders_quantity",
         ),
-        CheckConstraint("reservation_amount = quantity * unit_price", name="ck_orders_value"),
+        CheckConstraint(
+            "side = 'BUY' AND currency = 'EUR' AND unit_price = 100.00",
+            name="ck_orders_demo_terms",
+        ),
+        CheckConstraint(
+            "reservation_amount = quantity * unit_price",
+            name="ck_orders_value",
+        ),
         CheckConstraint(
             "business_status IN ('PENDING', 'ACCEPTED', 'FILLED', 'REJECTED')",
             name="ck_orders_business_status",
         ),
         CheckConstraint(
-            "communication_status IN ('NOT_SENT', 'IN_FLIGHT', 'UNKNOWN', 'CONFIRMED')",
+            "communication_status IN ('NOT_SENT', 'IN_FLIGHT', "
+            "'UNKNOWN', 'CONFIRMED')",
             name="ck_orders_communication_status",
         ),
     )
     id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), nullable=False, index=True)
-    instrument: Mapped[str] = mapped_column(ForeignKey("instruments.id"), nullable=False)
+    account_id: Mapped[str] = mapped_column(
+        ForeignKey("accounts.id"), nullable=False, index=True
+    )
+    instrument: Mapped[str] = mapped_column(
+        ForeignKey("instruments.id"), nullable=False
+    )
     side: Mapped[str] = mapped_column(String(4), nullable=False)
     quantity: Mapped[int] = mapped_column(BigInteger, nullable=False)
     unit_price: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
-    reservation_amount: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
+    reservation_amount: Mapped[Decimal] = mapped_column(
+        Numeric(20, 2), nullable=False
+    )
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     business_status: Mapped[str] = mapped_column(String(16), nullable=False)
-    communication_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    communication_status: Mapped[str] = mapped_column(
+        String(16), nullable=False
+    )
 
 
 class ReservationRow(Base):
     __tablename__ = "cash_reservations"
     __table_args__ = (
-        ForeignKeyConstraint(["order_id", "account_id"], ["orders.id", "orders.account_id"]),
-        CheckConstraint("amount > 0 AND currency = 'EUR'", name="ck_reservations_amount_currency"),
+        ForeignKeyConstraint(
+            ["order_id", "account_id"], ["orders.id", "orders.account_id"]
+        ),
+        CheckConstraint(
+            "amount > 0 AND currency = 'EUR'",
+            name="ck_reservations_amount_currency",
+        ),
     )
     order_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    account_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    account_id: Mapped[str] = mapped_column(
+        String(100), nullable=False, index=True
+    )
     amount: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
 
@@ -98,22 +129,26 @@ class ReservationRow(Base):
 def make_engine(url: str) -> Engine:
     if not url.startswith("postgresql+psycopg://"):
         raise ValueError("DATABASE_URL must use postgresql+psycopg")
-    return create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": 3})
+    return create_engine(
+        url, pool_pre_ping=True, connect_args={"connect_timeout": 3}
+    )
 
 
 def load_account(
-    session: Session, account_id: str, *, for_update: bool = False
+    session: Session,
+    account_id: str,
+    *,
+    for_update: bool = False,
+    owner_client_id: str | None = None,
 ) -> Account | None:
+    query = select(AccountRow).where(AccountRow.id == account_id)
+    if owner_client_id is not None:
+        query = query.where(AccountRow.owner_client_id == owner_client_id)
     if for_update:
-        # Serialize cash decisions for this account before reading reservations.
-        row = session.scalar(
-            select(AccountRow)
-            .where(AccountRow.id == account_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
+        query = query.with_for_update().execution_options(
+            populate_existing=True
         )
-    else:
-        row = session.get(AccountRow, account_id)
+    row = session.scalar(query)
     if row is None:
         return None
     reservations = session.scalars(
@@ -123,7 +158,10 @@ def load_account(
         id=row.id,
         posted_cash=Money(amount=row.posted_cash, currency=row.currency),
         reservations=tuple(
-            Reservation(order_id=item.order_id, amount=Money(amount=item.amount, currency=item.currency))
+            Reservation(
+                order_id=item.order_id,
+                amount=Money(amount=item.amount, currency=item.currency),
+            )
             for item in reservations
         ),
     )

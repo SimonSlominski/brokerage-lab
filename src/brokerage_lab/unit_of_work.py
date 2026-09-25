@@ -15,6 +15,7 @@ from brokerage_lab.repositories import (
 
 
 class UnitOfWork(Protocol):
+    session: Session
     accounts: AccountRepository
     orders: OrderRepository
 
@@ -30,7 +31,7 @@ class UnitOfWork(Protocol):
 
 
 class SqlAlchemyUnitOfWork:
-    """Single-use context: explicit commit, otherwise rollback, always close."""
+    """Single-use context: explicit commit and default rollback."""
 
     def __init__(self, engine: Engine):
         self._engine = engine
@@ -41,11 +42,17 @@ class SqlAlchemyUnitOfWork:
         if self._used:
             raise RuntimeError("Create a new Unit of Work for each operation")
         self._used = True
-        self._session = Session(self._engine, autobegin=False, close_resets_only=False)
+        self._session = Session(
+            self._engine, autobegin=False, close_resets_only=False
+        )
         self._session.begin()
         self.accounts = SqlAlchemyAccountRepository(self._session)
         self.orders = SqlAlchemyOrderRepository(self._session)
         return self
+
+    @property
+    def session(self) -> Session:
+        return self._active_session()
 
     def commit(self) -> None:
         self._active_session().commit()

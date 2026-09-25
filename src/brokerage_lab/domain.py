@@ -1,4 +1,4 @@
-"""Immutable domain state and business operations, independent of HTTP and SQLAlchemy."""
+"""Immutable domain state and validated business operations."""
 
 from __future__ import annotations
 
@@ -26,7 +26,9 @@ MAX_EUR_AMOUNT = Decimal("999999999999999999.99")
 MAX_QUANTITY = 9_999_999_999_999_999
 DEMO_INSTRUMENT = "SYNTH-100"
 DEMO_UNIT_PRICE = Decimal("100.00")
-Identifier = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+Identifier = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)
+]
 Quantity = Annotated[int, Field(strict=True, gt=0, le=MAX_QUANTITY)]
 
 
@@ -42,10 +44,14 @@ class DomainModel(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
     def _evolve(self, **changes: Any) -> Self:
-        values = {name: getattr(self, name) for name in type(self).model_fields}
+        values = {
+            name: getattr(self, name) for name in type(self).model_fields
+        }
         return type(self).model_validate(values | changes)
 
-    def model_copy(self, *, update: dict[str, Any] | None = None, deep: bool = False) -> Self:
+    def model_copy(
+        self, *, update: dict[str, Any] | None = None, deep: bool = False
+    ) -> Self:
         if update:
             raise DomainError("Use domain operations to change state")
         return super().model_copy(deep=deep)
@@ -83,7 +89,9 @@ class Money(DomainModel):
         if not isinstance(amount, Decimal) or not amount.is_finite():
             raise DomainError("Calculated amount must be a finite Decimal")
         if amount.copy_abs() > MAX_EUR_AMOUNT:
-            raise DomainError("Calculated amount is outside the supported range")
+            raise DomainError(
+                "Calculated amount is outside the supported range"
+            )
         with localcontext(Context(prec=40, rounding=ROUND_HALF_EVEN)):
             rounded = amount.quantize(CENT)
         return cls(amount=rounded)
@@ -121,7 +129,9 @@ class Order(DomainModel):
     instrument: Literal["SYNTH-100"] = DEMO_INSTRUMENT
     side: Literal["BUY"] = "BUY"
     quantity: Quantity
-    unit_price: Money = Field(default_factory=lambda: Money(amount=DEMO_UNIT_PRICE))
+    unit_price: Money = Field(
+        default_factory=lambda: Money(amount=DEMO_UNIT_PRICE)
+    )
     business_status: BusinessStatus = BusinessStatus.PENDING
     communication_status: CommunicationStatus = CommunicationStatus.NOT_SENT
 
@@ -143,13 +153,23 @@ class Order(DomainModel):
 
     def _transition_business(self, target: BusinessStatus) -> Self:
         allowed = {
-            BusinessStatus.PENDING: {BusinessStatus.ACCEPTED, BusinessStatus.FILLED, BusinessStatus.REJECTED},
-            BusinessStatus.ACCEPTED: {BusinessStatus.FILLED, BusinessStatus.REJECTED},
+            BusinessStatus.PENDING: {
+                BusinessStatus.ACCEPTED,
+                BusinessStatus.FILLED,
+                BusinessStatus.REJECTED,
+            },
+            BusinessStatus.ACCEPTED: {
+                BusinessStatus.FILLED,
+                BusinessStatus.REJECTED,
+            },
             BusinessStatus.FILLED: set(),
             BusinessStatus.REJECTED: set(),
         }
         if target not in allowed[self.business_status]:
-            raise DomainError(f"Invalid business transition: {self.business_status.value} -> {target.value}")
+            raise DomainError(
+                f"Invalid business transition: {self.business_status.value}"
+                f" -> {target.value}"
+            )
         return self._evolve(business_status=target)
 
     def accept(self) -> Self:
@@ -162,10 +182,20 @@ class Order(DomainModel):
         return self._transition_business(BusinessStatus.REJECTED)
 
     def start_send(self) -> Self:
-        if self.communication_status not in {CommunicationStatus.NOT_SENT, CommunicationStatus.UNKNOWN}:
-            raise DomainError("Cannot start a new send in this communication state")
-        if self.business_status in {BusinessStatus.FILLED, BusinessStatus.REJECTED}:
-            raise DomainError("Cannot send an order after a definitive outcome")
+        if self.communication_status not in {
+            CommunicationStatus.NOT_SENT,
+            CommunicationStatus.UNKNOWN,
+        }:
+            raise DomainError(
+                "Cannot start a new send in this communication state"
+            )
+        if self.business_status in {
+            BusinessStatus.FILLED,
+            BusinessStatus.REJECTED,
+        }:
+            raise DomainError(
+                "Cannot send an order after a definitive outcome"
+            )
         return self._evolve(communication_status=CommunicationStatus.IN_FLIGHT)
 
     def mark_timeout(self) -> Self:
@@ -174,7 +204,10 @@ class Order(DomainModel):
         return self._evolve(communication_status=CommunicationStatus.UNKNOWN)
 
     def confirm_partner_response(self) -> Self:
-        if self.communication_status not in {CommunicationStatus.IN_FLIGHT, CommunicationStatus.UNKNOWN}:
+        if self.communication_status not in {
+            CommunicationStatus.IN_FLIGHT,
+            CommunicationStatus.UNKNOWN,
+        }:
             raise DomainError("No pending partner result to confirm")
         return self._evolve(communication_status=CommunicationStatus.CONFIRMED)
 
@@ -210,7 +243,10 @@ class Account(DomainModel):
     @property
     def active_reservations(self) -> Money:
         with localcontext(Context(prec=40)):
-            total = sum((item.amount.amount for item in self.reservations), Decimal("0.00"))
+            total = sum(
+                (item.amount.amount for item in self.reservations),
+                Decimal("0.00"),
+            )
         return Money(amount=total)
 
     @property
@@ -226,28 +262,41 @@ class Account(DomainModel):
             raise DomainError("Order already has a reservation")
         if order.reservation_amount.amount > self.available_cash.amount:
             raise InsufficientFundsError("Insufficient available cash")
-        reservation = Reservation(order_id=order.id, amount=order.reservation_amount)
+        reservation = Reservation(
+            order_id=order.id, amount=order.reservation_amount
+        )
         return self._evolve(reservations=(*self.reservations, reservation))
 
     def _matching_reservation(self, order: Order) -> Reservation:
         if order.account_id == self.id:
             for reservation in self.reservations:
-                if reservation.order_id == order.id and reservation.amount == order.reservation_amount:
+                if (
+                    reservation.order_id == order.id
+                    and reservation.amount == order.reservation_amount
+                ):
                     return reservation
         raise DomainError("No matching active reservation")
 
     def release_rejected(self, order: Order) -> Self:
         if order.business_status != BusinessStatus.REJECTED:
-            raise DomainError("Only a definitive rejection releases reserved cash")
+            raise DomainError(
+                "Only a definitive rejection releases reserved cash"
+            )
         reservation = self._matching_reservation(order)
-        return self._evolve(reservations=tuple(item for item in self.reservations if item != reservation))
+        return self._evolve(
+            reservations=tuple(
+                item for item in self.reservations if item != reservation
+            )
+        )
 
     def book_demo_fill(self, order: Order) -> Self:
-        """Temporary in-memory projection; T4 will implement transactional ledger booking."""
+        """In-memory cash transition; executions.py persists accounting."""
         if order.business_status != BusinessStatus.FILLED:
             raise DomainError("Only a confirmed fill can book demo cash")
         reservation = self._matching_reservation(order)
         return self._evolve(
             posted_cash=self.posted_cash - reservation.amount,
-            reservations=tuple(item for item in self.reservations if item != reservation),
+            reservations=tuple(
+                item for item in self.reservations if item != reservation
+            ),
         )

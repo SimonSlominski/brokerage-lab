@@ -2,6 +2,7 @@
 
 from alembic import context
 
+from brokerage_lab import models  # noqa: F401
 from brokerage_lab.config import Settings
 from brokerage_lab.db import Base, make_engine
 
@@ -9,7 +10,9 @@ config = context.config
 
 
 def run(connection):
-    context.configure(connection=connection, target_metadata=Base.metadata, compare_type=True)
+    context.configure(
+        connection=connection, target_metadata=Base.metadata, compare_type=True
+    )
     with context.begin_transaction():
         context.run_migrations()
 
