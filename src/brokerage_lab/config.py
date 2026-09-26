@@ -7,6 +7,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
     app_env: Literal["development", "test", "production"] = "development"
     database_url: SecretStr
+
+    partner_url: str = "http://127.0.0.1:8001"
+    partner_api_key: SecretStr = SecretStr("")
+    operator_api_key: SecretStr = SecretStr("")
