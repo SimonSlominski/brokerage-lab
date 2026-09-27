@@ -24,7 +24,9 @@ def order(quantity: int = 8) -> Order:
     return Order.demo_buy("order-1", "account-1", quantity)
 
 
-@pytest.mark.parametrize("amount", ["1.005", "-0.001", "NaN", "Infinity", "1E+100"])
+@pytest.mark.parametrize(
+    "amount", ["1.005", "-0.001", "NaN", "Infinity", "1E+100"]
+)
 def test_rejects_invalid_money(amount):
     with pytest.raises(ValidationError):
         Money.from_text(amount)
@@ -43,9 +45,15 @@ def test_money_requires_decimal_eur_and_normalizes_exact_cents():
 def test_rounding_and_arithmetic_do_not_depend_on_caller_decimal_context():
     with localcontext() as ctx:
         ctx.prec = 3
-        assert Money.round_calculated(Decimal("1.005")).amount == Decimal("1.00")
-        assert Money.round_calculated(Decimal("1.015")).amount == Decimal("1.02")
-        assert (Money.from_text("1000.01") + Money.from_text("0.02")).amount == Decimal("1000.03")
+        assert Money.round_calculated(Decimal("1.005")).amount == Decimal(
+            "1.00"
+        )
+        assert Money.round_calculated(Decimal("1.015")).amount == Decimal(
+            "1.02"
+        )
+        assert (
+            Money.from_text("1000.01") + Money.from_text("0.02")
+        ).amount == Decimal("1000.03")
         assert order().reservation_amount.amount == Decimal("800.00")
 
 
@@ -63,9 +71,19 @@ def test_rejects_invalid_quantities(quantity):
 
 def test_rejects_unapproved_instrument_and_price():
     with pytest.raises(ValidationError):
-        Order(id="order-1", account_id="account-1", quantity=1, instrument="OTHER")
+        Order(
+            id="order-1",
+            account_id="account-1",
+            quantity=1,
+            instrument="OTHER",
+        )
     with pytest.raises(ValidationError):
-        Order(id="order-1", account_id="account-1", quantity=1, unit_price=Money.from_text("99.99"))
+        Order(
+            id="order-1",
+            account_id="account-1",
+            quantity=1,
+            unit_price=Money.from_text("99.99"),
+        )
 
 
 def test_reservation_timeout_and_insufficient_funds():
@@ -103,10 +121,16 @@ def test_confirmed_fill_consumes_demo_reservation_once():
         booked.book_demo_fill(filled)
 
 
-@pytest.mark.parametrize("terminal", [BusinessStatus.FILLED, BusinessStatus.REJECTED])
+@pytest.mark.parametrize(
+    "terminal", [BusinessStatus.FILLED, BusinessStatus.REJECTED]
+)
 @pytest.mark.parametrize("action", ["accept", "fill", "reject", "start_send"])
 def test_terminal_states_cannot_transition(terminal, action):
-    final = order().fill() if terminal == BusinessStatus.FILLED else order().reject()
+    final = (
+        order().fill()
+        if terminal == BusinessStatus.FILLED
+        else order().reject()
+    )
     with pytest.raises(DomainError):
         getattr(final, action)()
 
@@ -121,28 +145,42 @@ def test_public_mutations_and_unvalidated_copy_updates_are_blocked():
         with pytest.raises(ValidationError):
             setattr(original, field, value)
     with pytest.raises(DomainError):
-        original.fill().model_copy(update={"business_status": BusinessStatus.PENDING})
+        original.fill().model_copy(
+            update={"business_status": BusinessStatus.PENDING}
+        )
     reserved = account().reserve(original)
     with pytest.raises(ValidationError):
         reserved.reservations[0].amount = Money.from_text("1.00")
     with pytest.raises(ValidationError):
-        reserved.reservations += (Reservation(order_id="extra", amount=Money.from_text("1.00")),)
+        reserved.reservations += (
+            Reservation(order_id="extra", amount=Money.from_text("1.00")),
+        )
     assert reserved.available_cash.amount == Decimal("200.00")
 
 
 def test_construction_checks_nested_reservation_invariants():
-    reservation = Reservation(order_id="order-1", amount=Money.from_text("800.00"))
+    reservation = Reservation(
+        order_id="order-1", amount=Money.from_text("800.00")
+    )
     with pytest.raises(ValidationError):
         Account(
-            id="account-1", posted_cash=Money.from_text("1000.00"), reservations=(reservation, reservation)
+            id="account-1",
+            posted_cash=Money.from_text("1000.00"),
+            reservations=(reservation, reservation),
         )
     with pytest.raises(ValidationError):
-        Account(id="account-1", posted_cash=Money.from_text("100.00"), reservations=(reservation,))
+        Account(
+            id="account-1",
+            posted_cash=Money.from_text("100.00"),
+            reservations=(reservation,),
+        )
 
 
 def test_mismatched_or_duplicate_reservations_fail():
     with pytest.raises(DomainError):
-        Account(id="other", posted_cash=Money.from_text("1000.00")).reserve(order())
+        Account(id="other", posted_cash=Money.from_text("1000.00")).reserve(
+            order()
+        )
     reserved = account().reserve(order())
     with pytest.raises(DomainError):
         reserved.reserve(order())

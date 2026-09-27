@@ -3,7 +3,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from threading import Barrier
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -24,8 +24,15 @@ pytestmark = pytest.mark.postgres
 
 def test_order_reserves_cash_and_can_be_read(postgres_engine):
     seed_demo(postgres_engine)
-    with TestClient(create_app(engine=postgres_engine)) as client:
-        result = client.post("/demo/orders", json={"quantity": 8})
+    with TestClient(
+        create_app(engine=postgres_engine),
+        headers={"X-API-Key": "test-demo-key"},
+    ) as client:
+        result = client.post(
+            "/demo/orders",
+            json={"quantity": 8},
+            headers={"Idempotency-Key": str(uuid4())},
+        )
         assert result.status_code == 201
         body = result.json()
         UUID(body["order_id"])
@@ -41,9 +48,7 @@ def test_order_reserves_cash_and_can_be_read(postgres_engine):
             "business_status": "PENDING",
             "communication_status": "NOT_SENT",
         }
-        assert result.headers["location"] == (
-            f"/demo/orders/{body['order_id']}"
-        )
+        assert result.headers["location"] == (f"/orders/{body['order_id']}")
         assert client.get(result.headers["location"]).json() == body
         assert client.get("/demo/account").json() == {
             "account_id": DEMO_ACCOUNT_ID,
@@ -64,17 +69,26 @@ def test_insufficient_funds_create_no_partial_records(
     postgres_engine, first_quantity
 ):
     seed_demo(postgres_engine)
-    with TestClient(create_app(engine=postgres_engine)) as client:
+    with TestClient(
+        create_app(engine=postgres_engine),
+        headers={"X-API-Key": "test-demo-key"},
+    ) as client:
         if first_quantity:
             assert (
                 client.post(
-                    "/demo/orders", json={"quantity": first_quantity}
+                    "/demo/orders",
+                    json={"quantity": first_quantity},
+                    headers={"Idempotency-Key": str(uuid4())},
                 ).status_code
                 == 201
             )
         before = client.get("/demo/account").json()
         quantity = 3 if first_quantity else 11
-        rejected = client.post("/demo/orders", json={"quantity": quantity})
+        rejected = client.post(
+            "/demo/orders",
+            json={"quantity": quantity},
+            headers={"Idempotency-Key": str(uuid4())},
+        )
         assert rejected.status_code == 409
         assert rejected.json() == {"detail": "Insufficient available cash"}
         assert client.get("/demo/account").json() == before
@@ -86,29 +100,49 @@ def test_insufficient_funds_create_no_partial_records(
 
 def test_exact_remaining_cash_can_be_reserved(postgres_engine):
     seed_demo(postgres_engine)
-    with TestClient(create_app(engine=postgres_engine)) as client:
+    with TestClient(
+        create_app(engine=postgres_engine),
+        headers={"X-API-Key": "test-demo-key"},
+    ) as client:
         assert (
-            client.post("/demo/orders", json={"quantity": 8}).status_code
+            client.post(
+                "/demo/orders",
+                json={"quantity": 8},
+                headers={"Idempotency-Key": str(uuid4())},
+            ).status_code
             == 201
         )
         assert (
-            client.post("/demo/orders", json={"quantity": 2}).status_code
+            client.post(
+                "/demo/orders",
+                json={"quantity": 2},
+                headers={"Idempotency-Key": str(uuid4())},
+            ).status_code
             == 201
         )
         assert client.get("/demo/account").json()["available_cash"] == "0.00"
         assert (
-            client.post("/demo/orders", json={"quantity": 1}).status_code
+            client.post(
+                "/demo/orders",
+                json={"quantity": 1},
+                headers={"Idempotency-Key": str(uuid4())},
+            ).status_code
             == 409
         )
 
 
 def test_missing_demo_account_has_no_side_effects(postgres_engine):
-    with TestClient(create_app(engine=postgres_engine)) as client:
-        response = client.post("/demo/orders", json={"quantity": 8})
+    with TestClient(
+        create_app(engine=postgres_engine),
+        headers={"X-API-Key": "test-demo-key"},
+    ) as client:
+        response = client.post(
+            "/demo/orders",
+            json={"quantity": 8},
+            headers={"Idempotency-Key": str(uuid4())},
+        )
         assert response.status_code == 404
-        assert response.json() == {
-            "detail": "Demo account not found; run the demo seed command"
-        }
+        assert response.json() == {"detail": "Account not found"}
     with Session(postgres_engine) as session:
         assert session.scalars(select(OrderRow)).all() == []
         assert session.scalars(select(ReservationRow)).all() == []
@@ -128,7 +162,10 @@ def test_order_read_is_limited_to_demo_account(postgres_engine):
         session.add(
             order_to_row(Order.demo_buy("other-order", "other-account", 1))
         )
-    with TestClient(create_app(engine=postgres_engine)) as client:
+    with TestClient(
+        create_app(engine=postgres_engine),
+        headers={"X-API-Key": "test-demo-key"},
+    ) as client:
         for order_id in ["missing-order", "other-order"]:
             result = client.get(f"/demo/orders/{order_id}")
             assert result.status_code == 404
@@ -148,8 +185,15 @@ def test_failure_during_submission_rolls_back_all_writes(
         raise OperationalError("hidden SQL", {}, Exception("secret"))
 
     monkeypatch.setattr(SqlAlchemyAccountRepository, "add_reservation", fail)
-    with TestClient(create_app(engine=postgres_engine)) as client:
-        result = client.post("/demo/orders", json={"quantity": 8})
+    with TestClient(
+        create_app(engine=postgres_engine),
+        headers={"X-API-Key": "test-demo-key"},
+    ) as client:
+        result = client.post(
+            "/demo/orders",
+            json={"quantity": 8},
+            headers={"Idempotency-Key": str(uuid4())},
+        )
         assert result.status_code == 503
         assert "secret" not in result.text
         assert "hidden SQL" not in result.text
@@ -179,7 +223,10 @@ def test_two_simultaneous_orders_cannot_overspend(postgres_engine):
     def submit():
         try:
             submit_order(
-                DEMO_ACCOUNT_ID, 8, SqlAlchemyUnitOfWork(postgres_engine)
+                DEMO_ACCOUNT_ID,
+                8,
+                SqlAlchemyUnitOfWork(postgres_engine),
+                client_id="demo-client",
             )
             return "created"
         except InsufficientFundsError:
@@ -208,5 +255,8 @@ def test_two_simultaneous_orders_cannot_overspend(postgres_engine):
         assert session.get(AccountRow, DEMO_ACCOUNT_ID).posted_cash == Decimal(
             "1000.00"
         )
-    with TestClient(create_app(engine=postgres_engine)) as client:
+    with TestClient(
+        create_app(engine=postgres_engine),
+        headers={"X-API-Key": "test-demo-key"},
+    ) as client:
         assert client.get("/demo/account").json()["available_cash"] == "200.00"

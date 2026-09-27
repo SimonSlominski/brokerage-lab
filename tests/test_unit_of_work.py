@@ -28,14 +28,20 @@ def test_explicit_commit_is_visible_in_new_session(postgres_engine):
             assert independent.get(OrderRow, order.id) is None
         uow.commit()
     with Session(postgres_engine) as independent:
-        assert independent.get(AccountRow, account.id).posted_cash == Decimal("1000.00")
+        assert independent.get(AccountRow, account.id).posted_cash == Decimal(
+            "1000.00"
+        )
         assert independent.get(OrderRow, order.id).quantity == 8
 
 
 @pytest.mark.parametrize("failure", [False, True])
-def test_without_commit_both_flushed_writes_are_rolled_back(postgres_engine, failure):
+def test_without_commit_both_flushed_writes_are_rolled_back(
+    postgres_engine, failure
+):
     seed_demo(postgres_engine)
-    account = Account(id="rollback-account", posted_cash=Money.from_text("1000.00"))
+    account = Account(
+        id="rollback-account", posted_cash=Money.from_text("1000.00")
+    )
     try:
         with SqlAlchemyUnitOfWork(postgres_engine) as uow:
             uow.accounts.add(account)
@@ -53,7 +59,9 @@ def test_without_commit_both_flushed_writes_are_rolled_back(postgres_engine, fai
 
 def test_database_failure_does_not_leave_partial_account(postgres_engine):
     seed_demo(postgres_engine)
-    account = Account(id="failed-account", posted_cash=Money.from_text("1000.00"))
+    account = Account(
+        id="failed-account", posted_cash=Money.from_text("1000.00")
+    )
     with pytest.raises(IntegrityError):
         with SqlAlchemyUnitOfWork(postgres_engine) as uow:
             uow.accounts.add(account)
@@ -91,4 +99,6 @@ def test_exception_after_commit_does_not_undo_durable_changes(postgres_engine):
             uow.commit()
             raise RuntimeError("After commit")
     with Session(postgres_engine) as independent:
-        assert independent.get(AccountRow, account.id).posted_cash == Decimal("1000.00")
+        assert independent.get(AccountRow, account.id).posted_cash == Decimal(
+            "1000.00"
+        )
