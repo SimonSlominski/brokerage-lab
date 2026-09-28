@@ -1,176 +1,134 @@
 # Brokerage Lab
 
-A local proof of concept for reliable investment order processing. The current increment includes an immutable Pydantic domain model, a local FastAPI order demo, SQLAlchemy mappings and PostgreSQL migrations.
+A local failure laboratory for investment order processing: **did the partner execute the order?** It demonstrates what a local transaction can guarantee and what requires a partner contract. Synthetic EUR BUY orders only; no real trading, FX, partial fills or settlement.
 
-The main question is: **Did the execution partner accept the order?** A lost response must not become a fabricated rejection or release reserved cash.
-
-## Current behavior
-
-- Money uses Decimal and EUR cents; invalid inputs are rejected.
-- Account and Order enforce reservation and state transition rules through immutable domain operations.
-- PostgreSQL contains accounts, instruments, orders and cash reservations, created through Alembic.
-- The demo account starts with 1000.00 EUR; the synthetic instrument costs 100.00 EUR per whole unit.
-- FastAPI exposes health checks, the known demo account, local order submission and order reads. Order creation reserves cash atomically; multi-client authentication and request idempotency remain future work.
-- Worker, external partner simulation, ledger and reconciliation remain planned components.
-
-## Start the entire application
-
-With Docker Desktop running, execute this command from the repository root:
+## Run
 
 ```bash
 docker compose up --build
 ```
 
-This is the complete startup workflow. No host Python installation, virtual environment, Make command or manual migration command is needed.
+Docker Desktop and a private `.env` are required. The existing local `.env` is ready; a new clone needs the values described in `.env.example` once. Compose reads them automatically. There is no host Python or manual migration step.
 
-Compose runs two containers together: PostgreSQL and the API. After PostgreSQL becomes healthy, the API entrypoint applies Alembic migrations, seeds missing demo data and starts Uvicorn. A migration or seed failure stops startup. Existing balances are preserved by the seed. This startup migration approach is intended for this single local API instance.
+- [Operator panel](http://127.0.0.1:8000/lab): browser login `operator`, password `OPERATOR_API_KEY` from `.env`.
+- [Swagger](http://127.0.0.1:8000/docs): client requests use `X-API-Key`; operator requests use `X-Operator-Key`.
+- `/health/live` checks the API process; `/health/ready` checks local database access. Neither promises that the partner is available.
 
-The existing .env supplies local credentials automatically. Do not overwrite it with .env.example. For a new clone on another machine, create .env once using the example as a template. No AWS services are needed. Configuration is supplied at runtime, not baked into the image.
+Compose starts the API, worker, partner simulator and two PostgreSQL 17 databases. A separate migration job applies local Alembic migrations and seeds missing accounts before API/worker startup. The partner applies its own migrations. Existing balances and history survive restart. `docker compose down` stops the stack without deleting volumes.
 
-Open [API documentation](http://127.0.0.1:8000/docs), [database readiness](http://127.0.0.1:8000/health/ready), or [demo cash](http://127.0.0.1:8000/demo/account).
+## Try the failures
 
-To run in the background instead:
+The panel presents five visual experiments. Each creates an isolated funded account and records a run ID, seed, status and evidence. A streaming walkthrough highlights the fault and recovery on the architecture diagram, alongside observed cash, reservations and share counts. Checkpoints are paced for readability and can be paused, stepped through or replayed without submitting another order. Technical evidence and explicitly labelled IDs remain in expandable details. The trading ticket shows 8 shares × EUR 100 = EUR 800 against EUR 1,000 starting cash. **LEMON / lemon.markets** is a fictional display name for the existing `SYNTH-100` instrument, not a listed stock or real integration. The mismatch experiment has a separate report comparison ticket and submits no buy order.
 
-```bash
-docker compose up --build -d
-```
+Scenarios call the partner over HTTP; the partner persists its own orders and reports.
 
-To stop the stack while preserving the database:
-
-```bash
-docker compose down
-```
-
-## Local order demo
-
-In Swagger, submit POST /demo/orders with:
-
-```json
-{"quantity": 8}
-```
-
-For a fresh 1000.00 EUR demo account, expect HTTP 201, PENDING / NOT_SENT and a reservation of 800.00 EUR. GET /demo/account then shows 1000.00 posted, 800.00 reserved and 200.00 available. Follow the response Location header or GET /demo/orders/{order_id} to read the order.
-
-A subsequent order with quantity 3 returns HTTP 409 and "Insufficient available cash", leaving existing records unchanged. Invalid quantities or unsupported currency/instrument/side return 422. The only supported terms are BUY, SYNTH-100, EUR and 100.00 per whole unit. Account IDs and prices cannot be supplied by the client.
-
-This creates a local order, not a partner execution. Requests are not yet idempotent: resending the same request may create another order if funds permit. A database connection failure during commit can leave the outcome unknown; a 503 response is not a definitive business rejection. The account lock serializes concurrent submissions through this service, not arbitrary SQL writers.
-
-## Edit code while Docker is running
-
-Compose mounts src into the API container and Uvicorn reloads after Python source changes. Save a file in PyCharm to reload the API; no image rebuild is needed for source edits. PYTHONPATH points to /app/src so Python imports the mounted source rather than the installed image copy.
-
-Rebuild after changing dependencies or the Dockerfile. Restart the API after adding a migration: source reload alone does not rerun the container entrypoint.
-
-## Alembic migrations
-
-The initial migration is versioned in migrations/versions. Every API container startup runs alembic upgrade head automatically; already applied migrations are not reapplied.
-
-Inspect the current revision:
-
-```bash
-docker compose exec api alembic current
-```
-
-The migrations directory is also mounted, so generated migration files are saved directly in the repository. With the stack running, generate a migration after changing the SQLAlchemy models:
-
-```bash
-docker compose exec api alembic revision --autogenerate -m "Describe the schema change"
-```
-
-Review the generated file, then apply it:
-
-```bash
-docker compose exec api alembic upgrade head
-```
-
-Startup applies existing migrations automatically; it does not generate them. A Python source reload does not apply new migrations.
-
-## Why pyproject.toml exists
-
-pyproject.toml describes the Python package, supported dependencies and test/lint settings. The Dockerfile uses it to install brokerage_lab inside the image. requirements/base.txt pins runtime dependencies only. requirements/dev.txt includes that file and adds pytest, HTTP test dependencies and Ruff. The Docker image installs only runtime dependencies; optional local test setup installs requirements/dev.txt. Neither file requires a separate manual startup step.
-
-## Optional local Python development
-
-Only use this workflow if you want to run or debug Python directly in PyCharm. The existing .venv is already installed on this machine; select .venv/bin/python as its interpreter. On a fresh checkout, make setup creates this environment.
-
-Start the database with docker compose up -d db, then use make migrate, make seed and make run. Stop the Docker API first with docker compose stop api to free port 8000. Use the repository root as your working directory. The local Pydantic Settings configuration reads .env; its DATABASE_URL uses 127.0.0.1:55432 while the container uses db:5432.
-
-On macOS, if Docker is installed but not in the terminal PATH:
-
-```bash
-export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
-```
-
-## Tests and database migrations
-
-```bash
-# Optional local .venv with requirements/dev.txt installed
-make test       # Domain and API tests; PostgreSQL tests explicitly skipped
-make verify     # Includes real PostgreSQL tests and lint; requires make db
-.venv/bin/alembic check
-```
-
-PostgreSQL tests create a unique temporary schema for each test and drop only that schema afterward. They test migration, HTTP reads, domain mapping, rollback, independent connections, constraints and scoped reset. They do not yet prove concurrent order submission or distributed exactly-once effects.
-
-To reset only the known demo account and its dependent orders/reservations:
-
-```bash
-make reset-demo
-```
-
-Reset requires development mode and explicit confirmation (provided by this Make target). Other accounts are retained. Seed is idempotent and preserves existing account balances.
-
-## Code map
-
-| File | Responsibility |
+| Scenario | Expected evidence |
 |---|---|
-| `src/brokerage_lab/domain.py` | Immutable Pydantic values, accounts, orders and business operations |
-| `src/brokerage_lab/schemas.py` | Public response shapes |
-| `src/brokerage_lab/api.py` | FastAPI routes and lifecycle |
-| `src/brokerage_lab/db.py` | SQLAlchemy tables and explicit domain mapping |
-| `src/brokerage_lab/config.py` | Environment configuration |
-| `src/brokerage_lab/demo.py` | Local seed/reset commands |
-| `migrations/` | Versioned database schema |
-| `tests/` | Domain, HTTP and PostgreSQL evidence |
+| Lost response | UNKNOWN retains 800 EUR; lookup resolves one execution; final cash 200, reservation 0 |
+| 20 retries | One client/key produces one order and reservation despite concurrent requests |
+| Worker crash | A real subprocess exits after remote commit; lease expiry and lookup recover the same execution |
+| 10 executions | Concurrent delivery produces one journal transaction and instrument movement |
+| 975 / 950 mismatch | Explicit report fixture creates an OPEN amount discrepancy; cash remains unchanged |
 
-Domain changes return a new validated instance:
+The mismatch is a **controlled report fixture**, not a possible quantity at the fixed 100 EUR unit price. FAILED runs remain visible. Metrics come from database rows, not scripted success counters. Missing-record metrics count unresolved cases and can include repeated reports.
 
-```python
-from brokerage_lab.domain import Account, Money, Order
+For individual orders, submit `POST /demo/orders` with `{"quantity":8}`, `X-API-Key` and a new `Idempotency-Key`. A new account starts with 1000 EUR. Reservation gives 1000 posted / 800 reserved / 200 available; execution gives 200 / 0 / 200. The background worker may finish before your next read.
 
-account = Account(id="example", posted_cash=Money.from_text("1000.00"))
-order = Order.demo_buy("purchase-1", account.id, 8)
-account = account.reserve(order)
-order = order.start_send().mark_timeout()
-assert account.available_cash == Money.from_text("200.00")
-```
+Same client/key and normalized payload replays the original 201 response, even after execution. Read the returned order URL for current state. Changed payload under that key returns 422. Different keys mean distinct intentions. Keys have no automatic expiry in this MVP. Foreign accounts return 404; missing credentials return 401.
 
-Always keep the returned state. Direct field assignment and `model_copy(update=...)` are blocked. Deliberate validation bypasses such as `model_construct`, private methods and Python internals are not supported application entry points. Restoration from trusted persistence validates state but does not prove transition history.
-
-## D04 transaction boundary
-
-The demo account endpoint calls services.py, which reads through repositories.py within a transaction managed by unit_of_work.py. Domain objects remain Pydantic models; ORM rows remain SQLAlchemy classes.
-
-Repository add flushes SQL but never commits. Call uow.commit() explicitly to make writes durable. Leaving the context without commit rolls back, even on normal exit. An exception before commit rolls back all writes in that transaction. An exception after successful commit cannot undo it. Each Unit of Work instance is single-use and closes its session on exit.
-
-The submission service locks the account before checking cash, then inserts the order and reservation in one Unit of Work. Repositories never commit independently. The HTTP demo always uses demo-account and does not expose other accounts. This fixed demo scope is not multi-client authorization.
-
-## First Git checkpoint
-
-Commit source, tests, migrations, Docker configuration, dependency files, and documentation together as a working foundation. `.env`, `.venv`, caches and `.idea` are ignored. Review `git status --short` first. Git author name and email were not configured during setup; set your own identity locally before the first commit (use a verified GitHub email or your GitHub noreply address).
+## Verify
 
 ```bash
-git config user.name "Your Name"
-git config user.email "Your GitHub email or noreply address"
+make verify       # Build test container; Ruff + all tests on real PostgreSQL
 ```
+
+Import both files in [`postman/`](postman/) and put your private keys into a local Postman environment. Run the collection in order: it creates fresh scenario data and includes replay, conflicts, ownership, cash, positions and reconciliation. Never export an environment containing real keys into Git.
+
+Validated locally on 2026-09-25: **110 tests passed**, Ruff check/format passed; all five scenarios also passed through the live streaming API. Earlier Postman validation: Postman/Newman **24 requests, 41 assertions, zero failures**. GitHub Actions is configured; its remote result is pending push. Tests use disposable database schemas and independent connections for concurrency. They do not reset your demo account.
+
+[`artifacts/benchmark.json`](artifacts/benchmark.json) records a local hot-key replay measurement: 100 requests, concurrency 10, 215.91 requests/sec, p95 54.507 ms, zero errors, invariants checked. This small run is not evidence of production capacity or partner throughput.
+
+Presentation artifacts: [panel](artifacts/panel.png), [60-second recording](artifacts/demo-60s.webm), [five-minute walkthrough](artifacts/walkthrough-5min.webm). Recordings show the running application with explanatory captions and no voice-over.
+
+## Development
+
+Optional PyCharm interpreter: `.venv/bin/python`. `make setup` installs the package and development dependencies. Run from the repository root:
 
 ```bash
-git add .
-git diff --cached --check
-git diff --cached --stat
-git commit -m "Build Pydantic domain and local FastAPI PostgreSQL foundation"
-git push -u origin main
+make format       # Ruff format, then Ruff check --fix
+make lint         # Check without modifying files
+make verify-local # Full PostgreSQL tests using your local environment
+make benchmark    # Live HTTP replay measurement; requires running stack
 ```
 
-A commit is a local history checkpoint. Push uploads it to the configured GitHub repository. Local tests and development do not require a push.
+Ruff follows the reference service's E/F/I rule families, double quotes and four-space indentation, with the requested **79 columns** (the reference used 95). Ruff cannot automatically shorten every string. `requirements/base.txt` contains runtime dependencies; `dev.txt` adds tooling. `pyproject.toml` packages the application and configures pytest.
 
+API source edits reload through the Compose mount. Rebuild to update worker/partner code or dependencies. For a schema change, use the local admin connection: `.venv/bin/alembic revision --autogenerate -m "Describe change"`, review the generated migration, then restart with `docker compose up --build`. The runtime API role deliberately cannot modify schema or accounting history. Partner migrations use `partner-alembic.ini` and its separate database. Never point that configuration at the local application database.
+
+## Design and guarantees
+
+```mermaid
+flowchart LR
+    Client -->|intention + idempotency key| Lab[Brokerage Lab]
+    Operator -->|inspect and recover| Lab
+    Lab -->|stable client_order_id| Partner[Execution partner]
+    Partner -->|result and report| Lab
+```
+
+```mermaid
+flowchart LR
+    API[FastAPI + operator panel] --> DB[(Local PostgreSQL)]
+    Worker -->|claim / acknowledge| DB
+    Worker -->|HTTP outside DB transaction| Partner[Partner FastAPI]
+    Partner --> PDB[(Partner PostgreSQL)]
+    Reconciliation -->|HTTP report / lookup| Partner
+    Reconciliation --> DB
+```
+
+```mermaid
+sequenceDiagram
+    participant W as Worker
+    participant D as Local DB
+    participant P as Partner
+    W->>D: Claim outbox message; commit lease
+    W->>P: Submit stable client_order_id
+    P->>P: Commit deduplicated execution
+    P--xW: Response lost
+    W->>D: UNKNOWN; retain reservation
+    W->>P: Lookup original client_order_id
+    P-->>W: Existing execution
+    W->>D: Atomic dedup + ledger + position + release + status
+```
+
+| Module | Responsibility |
+|---|---|
+| `domain.py`, `contracts.py`, `schemas.py` | Pydantic values, transitions and boundary validation |
+| `services.py`, `repositories.py`, `unit_of_work.py` | Account locking, idempotency and explicit transaction ownership |
+| `db.py`, `models.py`, `ledger.py`, `executions.py` | ORM, immutable balanced history, cash projection and execution deduplication |
+| `worker.py`, `transport.py`, `partner.py` | Leased outbox delivery and durable remote simulator |
+| `reconciliation.py`, `operations.py` | Cutoff-aware comparison, investigation and evidence-based recovery |
+| `scenarios.py`, `panel.py` | Repeatable failure demonstrations and persisted observations |
+
+<details><summary>Five architecture decisions</summary>
+
+1. **Pydantic domain, separate SQLAlchemy persistence.** Domain operations return validated new state. Boundary schemas validate input; domain operations enforce business rules. This retains familiar models without making ORM rows the public contract.
+2. **Explicit service transaction and small repositories.** One service owns commit; repositories flush only. A unit of work rolls back on exit without commit. This makes the multi-table order/reservation/idempotency/outbox boundary visible. It is a pragmatic separation, not a framework requirement; ordinary CRUD remains suitable for simple independent updates.
+3. **At-least-once delivery with leased outbox.** Order and delivery intent commit together. Network calls happen outside local transactions. Lease tokens reject stale acknowledgements. Remote retries need stable identity, durable deduplication and lookup; a local DB cannot enforce remote exactly-once behavior.
+4. **Append-only double-entry cash history.** Every journal balances EUR against a clearing bucket; units live in a separate register. Execution identity and all effects commit together. Corrections append linked opposite effects; originals remain unchanged. Constraints, triggers and restricted runtime grants protect history, not against database administrators.
+5. **Evidence-driven reconciliation and explicit uncertainty.** Compare five discrepancy categories at the report cutoff. Missing local executions can be recovered through validated partner lookup and normal booking. A mismatch alone cannot repair cash. UNKNOWN and exhausted retries retain reservations; operator attention is required.
+
+</details>
+
+<details><summary>Postmortem: rejected orders incorrectly appeared missing</summary>
+
+During implementation review, the local reconciliation snapshot contained only booked executions, while the partner report also included confirmed rejected orders. This mismatch in record selection would classify a known rejection as MISSING_LOCAL. No production system or real funds were involved.
+
+The fix includes dated ACCEPTED/REJECTED acknowledgement evidence in the local snapshot and reconstructs state at the cutoff even if a fill arrived later. Recovery also rejects contradictory ACCEPTED/REJECTED responses carrying execution data. `test_confirmed_rejection_is_not_missing_execution` now submits a rejection through the partner HTTP path and asserts an empty discrepancy set. Pure comparison tests alone could not establish that the report inputs represented the same population.
+
+</details>
+
+## Boundaries
+
+This is a development MVP. Local API keys and browser Basic authentication are not a production identity system. Failure controls run only in development mode. Retry exhaustion goes to a visible error queue without releasing cash. Recovery, high availability, retention policies, production credentials/TLS, real broker integration and settlement require further design.
+
+The partner simulator demonstrates a contract; it does not establish that any real provider offers these guarantees. Existing pre-outbox demo orders are preserved rather than automatically sent. Use new panel runs for clean demonstrations. A demo reset refuses booked history; it is not an accounting eraser.

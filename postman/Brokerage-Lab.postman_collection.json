@@ -1,0 +1,806 @@
+{
+  "info": {
+    "name": "Brokerage Lab \u2014 executable acceptance walkthrough",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Run in order against the local development lab. Credentials are environment variables. Creates fresh scenario accounts; never resets existing data. Scenario scripts verify persisted outcomes."
+  },
+  "variable": [
+    {
+      "key": "run_id",
+      "value": ""
+    },
+    {
+      "key": "account_id",
+      "value": ""
+    },
+    {
+      "key": "order_id",
+      "value": ""
+    },
+    {
+      "key": "request_key",
+      "value": ""
+    },
+    {
+      "key": "reconciliation_id",
+      "value": ""
+    },
+    {
+      "key": "break_id",
+      "value": ""
+    },
+    {
+      "key": "replay_body",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "01 Liveness",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/health/live"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 Readiness",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/health/ready"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 Missing credentials",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/demo/account"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 Create isolated retry-storm run",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Operator-Key",
+            "value": "{{operator_key}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/lab/runs",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"scenario\": \"retry_storm\", \"seed\": 42}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+              "const run = pm.response.json();",
+              "pm.test(\"Scenario passed\", () => pm.expect(run.status).to.eql(\"PASSED\"));",
+              "pm.collectionVariables.set(\"run_id\", run.run_id);",
+              "pm.collectionVariables.set(\"account_id\", run.evidence.final.account_id);",
+              "pm.collectionVariables.set(\"order_id\", run.evidence.final.orders[0].id);",
+              "pm.collectionVariables.set(\"request_key\", run.run_id + \":intent\");",
+              "pm.test(\"20 requests, one order\", () => { pm.expect(run.evidence.requests).to.eql(20); pm.expect(run.evidence.distinct_order_ids).to.eql(1); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 Replay committed order",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{client_key}}"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{request_key}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/accounts/{{account_id}}/orders",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"quantity\": 8}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+              "pm.test(\"Original order\", () => pm.expect(pm.response.json().order_id).to.eql(pm.collectionVariables.get(\"order_id\")));",
+              "pm.collectionVariables.set(\"replay_body\", pm.response.text());"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 Normalized replay",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{client_key}}"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{request_key}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/accounts/{{account_id}}/orders",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"currency\": \"EUR\", \"quantity\": 8, \"side\": \"BUY\", \"instrument\": \"SYNTH-100\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+              "pm.test(\"Same response\", () => pm.expect(pm.response.json()).to.deep.eql(JSON.parse(pm.collectionVariables.get(\"replay_body\"))));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 Changed payload conflicts",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{client_key}}"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{request_key}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/accounts/{{account_id}}/orders",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"quantity\": 1}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 422\", () => pm.response.to.have.status(422));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "08 Missing request key",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{client_key}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/accounts/{{account_id}}/orders",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"quantity\": 1}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 422\", () => pm.response.to.have.status(422));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "09 Insufficient cash",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{client_key}}"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{run_id}}:insufficient"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/accounts/{{account_id}}/orders",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"quantity\": 3}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 409\", () => pm.response.to.have.status(409));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "10 Cash after one fill",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{client_key}}"
+          }
+        ],
+        "url": "{{base_url}}/accounts/{{account_id}}/cash"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "pm.test(\"Cash 200, reserved 0, available 200\", () => { const body = pm.response.json(); pm.expect(body.posted_cash).to.eql(\"200.00\"); pm.expect(body.active_reservations).to.eql(\"0.00\"); pm.expect(body.available_cash).to.eql(\"200.00\"); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "11 Eight instrument units",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{client_key}}"
+          }
+        ],
+        "url": "{{base_url}}/accounts/{{account_id}}/positions"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "pm.test(\"Exactly eight units\", () => pm.expect(pm.response.json()).to.deep.eql([{instrument:\"SYNTH-100\",quantity:8}]));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "12 Actual current order state",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{client_key}}"
+          }
+        ],
+        "url": "{{base_url}}/orders/{{order_id}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "pm.test(\"Filled and confirmed\", () => { const body = pm.response.json(); pm.expect(body.business_status).to.eql(\"FILLED\"); pm.expect(body.communication_status).to.eql(\"CONFIRMED\"); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "13 Durable timeline",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{client_key}}"
+          }
+        ],
+        "url": "{{base_url}}/orders/{{order_id}}/timeline"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "pm.test(\"Execution booking present\", () => pm.expect(pm.response.json().some(e => e.kind === \"EXECUTION_BOOKED\")).to.eql(true));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "14 Foreign client cannot read",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{other_client_key}}"
+          }
+        ],
+        "url": "{{base_url}}/orders/{{order_id}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 404\", () => pm.response.to.have.status(404));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "15 Foreign client cannot submit",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{other_client_key}}"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{run_id}}:foreign"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/accounts/{{account_id}}/orders",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"quantity\": 1}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 404\", () => pm.response.to.have.status(404));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "16 lost_response",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Operator-Key",
+            "value": "{{operator_key}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/lab/runs",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"scenario\": \"lost_response\", \"seed\": 42}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+              "const run = pm.response.json();",
+              "pm.test(\"Scenario passed\", () => pm.expect(run.status).to.eql(\"PASSED\"));",
+              "pm.test(\"Unknown retains reservation\", () => pm.expect(run.evidence.unknown_snapshot.reserved).to.eql(\"800.00\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "17 worker_crash",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Operator-Key",
+            "value": "{{operator_key}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/lab/runs",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"scenario\": \"worker_crash\", \"seed\": 42}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+              "const run = pm.response.json();",
+              "pm.test(\"Scenario passed\", () => pm.expect(run.status).to.eql(\"PASSED\"));",
+              "pm.test(\"Actual process crash\", () => pm.expect(run.evidence.process_exit_code).to.eql(86));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "18 duplicate_execution",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Operator-Key",
+            "value": "{{operator_key}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/lab/runs",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"scenario\": \"duplicate_execution\", \"seed\": 42}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+              "const run = pm.response.json();",
+              "pm.test(\"Scenario passed\", () => pm.expect(run.status).to.eql(\"PASSED\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "19 amount_mismatch",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Operator-Key",
+            "value": "{{operator_key}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/lab/runs",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"scenario\": \"amount_mismatch\", \"seed\": 42}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+              "const run = pm.response.json();",
+              "pm.test(\"Scenario passed\", () => pm.expect(run.status).to.eql(\"PASSED\"));",
+              "pm.collectionVariables.set(\"reconciliation_id\", run.evidence.reconciliation_run_id);",
+              "pm.test(\"No cash adjustment\", () => pm.expect(run.evidence.final.posted_cash).to.eql(\"1000.00\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "20 Persisted mismatch evidence",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Operator-Key",
+            "value": "{{operator_key}}"
+          }
+        ],
+        "url": "{{base_url}}/reconciliation-runs/{{reconciliation_id}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "const cases = pm.response.json().breaks;",
+              "pm.test(\"One OPEN mismatch\", () => { pm.expect(cases.length).to.eql(1); pm.expect(cases[0].category).to.eql(\"AMOUNT_MISMATCH\"); pm.expect(cases[0].status).to.eql(\"OPEN\"); });",
+              "pm.collectionVariables.set(\"break_id\", cases[0].id);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "21 Begin investigation",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "X-Operator-Key",
+            "value": "{{operator_key}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/reconciliation-breaks/{{break_id}}",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"status\": \"INVESTIGATING\", \"reason\": \"Postman review of independent report snapshots\"}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "22 Audit history",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Operator-Key",
+            "value": "{{operator_key}}"
+          }
+        ],
+        "url": "{{base_url}}/reconciliation-breaks/{{break_id}}/history"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+              "pm.test(\"Both states retained\", () => pm.expect(pm.response.json().map(e=>e.status)).to.deep.eql([\"OPEN\",\"INVESTIGATING\"]));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "23 Operational metrics",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Operator-Key",
+            "value": "{{operator_key}}"
+          }
+        ],
+        "url": "{{base_url}}/metrics"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "24 Client cannot access operator metrics",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{client_key}}"
+          }
+        ],
+        "url": "{{base_url}}/metrics"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
