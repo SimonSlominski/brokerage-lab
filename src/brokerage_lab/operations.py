@@ -1,12 +1,15 @@
 """Operator-only recovery and observations; failure controls are local-only."""
 
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+import json
+from concurrent.futures import ThreadPoolExecutor
+from queue import Queue
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .auth import OperatorIdentity, require_demo_mode
-from .config import Settings
 from .contracts import (
     BreakUpdate,
     CorrectionCreate,
@@ -25,17 +28,12 @@ from .models import (
     ReconciliationRun,
     ScenarioRun,
 )
+from .panel import render_panel
 from .reconciliation import reconcile, recover_break, update_break
-from .transport import PartnerTransport
+from .scenarios import execute_scenario
+from .transport import partner_transport
 
 router = APIRouter()
-
-
-def partner_transport() -> PartnerTransport:
-    settings = Settings()
-    return PartnerTransport(
-        settings.partner_url, settings.partner_api_key.get_secret_value()
-    )
 
 
 def metrics(db: Session) -> dict:
@@ -116,8 +114,6 @@ def run_reconciliation(request: Request, operator: OperatorIdentity):
 def read_reconciliation(
     run_id: str, request: Request, operator: OperatorIdentity
 ):
-    from fastapi import HTTPException
-
     with Session(request.app.state.engine) as db:
         run = db.get(ReconciliationRun, run_id)
         if run is None:
@@ -202,18 +198,56 @@ def reverse(
 def run_scenario(
     payload: ScenarioCreate, request: Request, operator: OperatorIdentity
 ):
-    from .scenarios import execute_scenario
-
     require_demo_mode()
     return execute_scenario(
         request.app.state.engine, payload.scenario, payload.seed
     )
 
 
+@router.post("/lab/runs/stream")
+def stream_scenario(
+    payload: ScenarioCreate, request: Request, operator: OperatorIdentity
+):
+    require_demo_mode()
+    engine = request.app.state.engine
+
+    def stream():
+        events = Queue()
+
+        def execute():
+            try:
+                result = execute_scenario(
+                    engine,
+                    payload.scenario,
+                    payload.seed,
+                    on_step=events.put,
+                )
+                events.put(dict(type="result", result=result))
+            except Exception:
+                events.put(
+                    dict(
+                        type="error",
+                        message="Run interrupted; inspect saved runs and logs",
+                    )
+                )
+            finally:
+                events.put(None)
+
+        # Finish and persist the run even if the browser disconnects.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(execute)
+            while (event := events.get()) is not None:
+                yield json.dumps(event) + "\n"
+
+    return StreamingResponse(
+        stream(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.get("/lab/runs/{run_id}")
 def read_scenario(run_id: str, request: Request, operator: OperatorIdentity):
-    from fastapi import HTTPException
-
     with Session(request.app.state.engine) as db:
         run = db.get(ScenarioRun, run_id)
         if run is None:
@@ -230,6 +264,4 @@ def read_scenario(run_id: str, request: Request, operator: OperatorIdentity):
 
 @router.get("/lab", response_class=HTMLResponse)
 def panel(request: Request, operator: OperatorIdentity):
-    from .panel import render_panel
-
     return render_panel(request.app.state.engine)

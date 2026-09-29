@@ -24,9 +24,9 @@ from .models import (
     ReconciliationBreak,
     ScenarioRun,
 )
-from .operations import partner_transport
 from .reconciliation import reconcile
 from .services import create_order
+from .transport import partner_transport
 from .unit_of_work import SqlAlchemyUnitOfWork
 from .worker import process_one
 
@@ -67,6 +67,13 @@ def snapshot(engine, account_id: str) -> dict:
             order_count=len(orders),
             execution_count=booked,
             movement_count=movements,
+            share_quantity=int(
+                db.scalar(
+                    select(
+                        func.coalesce(func.sum(InstrumentMovement.quantity), 0)
+                    ).where(InstrumentMovement.account_id == account_id)
+                )
+            ),
             orders=[
                 dict(
                     id=row.id,
@@ -78,7 +85,9 @@ def snapshot(engine, account_id: str) -> dict:
         )
 
 
-def execute_scenario(engine, scenario: str, seed: int = 42) -> dict:
+def execute_scenario(
+    engine, scenario: str, seed: int = 42, *, on_step=None
+) -> dict:
     run_id = str(uuid4())
     account_id = f"lab-{run_id}"
     with Session(engine) as db, db.begin():
@@ -87,6 +96,21 @@ def execute_scenario(engine, scenario: str, seed: int = 42) -> dict:
     transport = partner_transport()
     evidence = {"source": "local PostgreSQL and partner HTTP", "seed": seed}
     error = None
+    evidence["steps"] = []
+
+    def checkpoint(title, detail, active, *, fault=None, values=None):
+        step = dict(
+            title=title,
+            detail=detail,
+            active=active,
+            fault=fault,
+            observed_at=utc_now().isoformat(),
+            snapshot=snapshot(engine, account_id),
+            values=values or {},
+        )
+        evidence["steps"].append(step)
+        if on_step:
+            on_step(dict(type="step", run_id=run_id, step=step))
 
     def submit(key: str = "intent", mode: str = "normal"):
         return create_order(
@@ -100,6 +124,11 @@ def execute_scenario(engine, scenario: str, seed: int = 42) -> dict:
         )
 
     try:
+        checkpoint(
+            "A fresh account is ready",
+            "This run starts with €1,000. Existing accounts are untouched.",
+            ["client", "db"],
+        )
         if scenario == "retry_storm":
             barrier = Barrier(20)
 
@@ -115,6 +144,14 @@ def execute_scenario(engine, scenario: str, seed: int = 42) -> dict:
                 "Retries created more than one order",
             )
             require(before["reserved"] == "800.00", "Unexpected reservation")
+            checkpoint(
+                "20 requests reached the API",
+                "All requests used the same idempotency key. "
+                "The database contains one order and one €800 reservation.",
+                ["client", "api", "db"],
+                fault="client",
+                values={"Requests": 20, "Distinct orders": len(set(ids))},
+            )
             evidence.update(
                 requests=20,
                 distinct_order_ids=len(set(ids)),
@@ -123,6 +160,12 @@ def execute_scenario(engine, scenario: str, seed: int = 42) -> dict:
             process_one(engine, transport, run_id=run_id)
         elif scenario == "lost_response":
             order = submit(mode="lost_response")
+            checkpoint(
+                "One order; €800 reserved",
+                "The order and delivery intent committed together. "
+                "€200 remains available while execution is pending.",
+                ["api", "db"],
+            )
             process_one(engine, transport, run_id=run_id, retry_delay=0)
             unknown = snapshot(engine, account_id)
             require(
@@ -130,12 +173,32 @@ def execute_scenario(engine, scenario: str, seed: int = 42) -> dict:
                 "Lost response did not produce UNKNOWN",
             )
             require(unknown["reserved"] == "800.00", "Unknown released cash")
+            checkpoint(
+                "The response was lost",
+                "The worker has no confirmed result: UNKNOWN. "
+                "It keeps €800 reserved instead of assuming failure.",
+                ["partner", "worker", "db"],
+                fault="response",
+            )
             evidence["unknown_snapshot"] = unknown
             remote = transport.lookup(order["order_id"])
+            checkpoint(
+                "Lookup finds the original execution",
+                "The partner confirms the existing order. "
+                "Recovery can book that result without another purchase.",
+                ["worker", "partner"],
+                values={"Partner status": remote.status},
+            )
             evidence["provider_order_id"] = remote.provider_order_id
             process_one(engine, transport, run_id=run_id)
         elif scenario == "worker_crash":
             order = submit()
+            checkpoint(
+                "The order is ready for delivery",
+                "€800 is reserved. A separate worker process will "
+                "submit this order to the partner.",
+                ["api", "db", "worker"],
+            )
             environment = os.environ.copy()
             environment["DATABASE_URL"] = engine.url.render_as_string(
                 hide_password=False
@@ -160,6 +223,14 @@ def execute_scenario(engine, scenario: str, seed: int = 42) -> dict:
                 result.returncode == 86, "Worker did not exit at fault point"
             )
             remote_before = transport.lookup(order["order_id"])
+            checkpoint(
+                "The worker crashed after remote execution",
+                "The partner has the order, but local booking did not "
+                "finish. The reservation remains in place.",
+                ["partner", "db"],
+                fault="worker",
+                values={"Worker exit code": result.returncode},
+            )
             evidence["process_exit_code"] = result.returncode
             evidence["after_crash"] = snapshot(engine, account_id)
             deadline = time.monotonic() + 5
@@ -173,6 +244,12 @@ def execute_scenario(engine, scenario: str, seed: int = 42) -> dict:
                 if lease <= utc_now():
                     break
                 time.sleep(0.05)
+            checkpoint(
+                "The lease expired; recovery can take over",
+                "Another worker can claim the delivery and look up "
+                "the same client order ID at the partner.",
+                ["db", "worker", "partner"],
+            )
             process_one(engine, transport, run_id=run_id)
             remote_after = transport.lookup(order["order_id"])
             require(
@@ -195,6 +272,12 @@ def execute_scenario(engine, scenario: str, seed: int = 42) -> dict:
                     run_id=run_id,
                 )
             )
+            checkpoint(
+                "The partner executed one order",
+                "Next, ten concurrent copies of the same execution "
+                "will reach local accounting.",
+                ["partner", "worker"],
+            )
             barrier = Barrier(10)
 
             def deliver(_):
@@ -205,6 +288,17 @@ def execute_scenario(engine, scenario: str, seed: int = 42) -> dict:
             with ThreadPoolExecutor(max_workers=10) as pool:
                 journals = list(pool.map(deliver, range(10)))
             require(len(set(journals)) == 1, "Duplicate accounting effect")
+            checkpoint(
+                "10 deliveries reached accounting",
+                "Execution identity deduplication and booking share "
+                "one transaction. Repeats return the same journal.",
+                ["partner", "worker", "db"],
+                fault="duplicates",
+                values={
+                    "Deliveries": 10,
+                    "Journal transactions": len(set(journals)),
+                },
+            )
             evidence.update(
                 deliveries=10, journal_transactions=len(set(journals))
             )
@@ -230,6 +324,14 @@ def execute_scenario(engine, scenario: str, seed: int = 42) -> dict:
                 report_id=f"fixture-{run_id}", cutoff=now, items=[remote]
             )
             report = transport.store_report_fixture(report)
+            checkpoint(
+                "Two reports disagree",
+                "Controlled report fixtures: local €950 versus partner "
+                "€975. These are comparison inputs, not real trades.",
+                ["db", "partner"],
+                fault="mismatch",
+                values={"Local report": "€950", "Partner report": "€975"},
+            )
             reconciliation_id = reconcile(
                 engine, report, local_fixture=[local]
             )
@@ -245,6 +347,14 @@ def execute_scenario(engine, scenario: str, seed: int = 42) -> dict:
                     and cases[0].status == "OPEN",
                     "Expected one open amount break",
                 )
+            checkpoint(
+                "A discrepancy was opened for investigation",
+                "Reconciliation detected the €25 difference. "
+                "An OPEN case needs investigation; cash is not adjusted.",
+                ["worker", "db"],
+                fault="mismatch",
+                values={"Difference": "€25", "Case status": "OPEN"},
+            )
             evidence.update(
                 source=(
                     "controlled local fixture and persisted partner "
@@ -277,6 +387,22 @@ def execute_scenario(engine, scenario: str, seed: int = 42) -> dict:
                 and final["movement_count"] == 0,
                 "Reconciliation changed money without evidence",
             )
+        if scenario == "amount_mismatch":
+            checkpoint(
+                "Mismatch detected; money unchanged",
+                "The safety check passed. The investigation remains OPEN. "
+                "No order was executed and no cash was moved.",
+                ["db", "worker"],
+                values={"Case status": "OPEN"},
+            )
+        else:
+            checkpoint(
+                "One execution. One cash debit.",
+                "Confirmed: €800 booked once, reservation released, "
+                "€200 remaining. The partner report contains one order.",
+                ["api", "db", "worker", "partner"],
+                values={"Partner orders": len(report.items)},
+            )
     except Exception as exc:
         logger.exception(
             "scenario_failed run_id=%s scenario=%s", run_id, scenario
@@ -291,6 +417,7 @@ def execute_scenario(engine, scenario: str, seed: int = 42) -> dict:
         run.error = error
     return dict(
         run_id=run_id,
+        scenario=scenario,
         status="FAILED" if error else "PASSED",
         evidence=evidence,
         error=error,
