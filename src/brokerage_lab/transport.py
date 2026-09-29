@@ -2,6 +2,7 @@
 
 import httpx
 
+from .config import Settings
 from .contracts import PartnerOrderCreate, PartnerReport, PartnerResult
 
 
@@ -46,3 +47,10 @@ class PartnerTransport:
         stored = self.client.get(f"/reports/{report_id}")
         stored.raise_for_status()
         return PartnerReport.model_validate(stored.json())
+
+
+def partner_transport() -> PartnerTransport:
+    settings = Settings()
+    return PartnerTransport(
+        settings.partner_url, settings.partner_api_key.get_secret_value()
+    )
