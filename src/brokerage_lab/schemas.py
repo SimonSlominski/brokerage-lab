@@ -3,7 +3,7 @@
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_serializer
 
 from brokerage_lab.domain import (
     Account,
@@ -13,6 +13,8 @@ from brokerage_lab.domain import (
     Order,
     Quantity,
 )
+
+from .api_formats import CashAmount, SharePrice, WireQuantity
 
 
 class ResponseModel(BaseModel):
@@ -76,3 +78,39 @@ class OrderResponse(ResponseModel):
             business_status=order.business_status,
             communication_status=order.communication_status,
         )
+
+
+class ApiOrderResponse(OrderResponse):
+    """Public representation; stored replay payloads keep their old format."""
+
+    quantity: WireQuantity
+    unit_price: SharePrice
+    reservation_amount: CashAmount
+
+    @field_serializer("side")
+    def serialize_side(self, value) -> Literal["buy"]:
+        return "buy"
+
+
+class ApiCreateOrderRequest(CreateOrderRequest):
+    quantity: WireQuantity
+    side: Literal["buy"] = "buy"
+
+
+class ApiCashResponse(CashResponse):
+    posted_cash: CashAmount
+    active_reservations: CashAmount
+    available_cash: CashAmount
+
+
+class ApiError(ResponseModel):
+    message: str
+
+
+class ApiValidationIssue(ResponseModel):
+    location: list[str | int]
+    message: str
+
+
+class ApiValidationError(ApiError):
+    errors: list[ApiValidationIssue]
