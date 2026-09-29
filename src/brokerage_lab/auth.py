@@ -1,5 +1,6 @@
 """Two configured local demo identities; not a production identity provider."""
 
+from base64 import b64decode
 from secrets import compare_digest
 from typing import Annotated
 
@@ -7,6 +8,8 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import APIKeyHeader
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from .config import Settings
 
 DEMO_CLIENT_ID = "demo-client"
 OTHER_CLIENT_ID = "other-demo-client"
@@ -48,10 +51,6 @@ AuthenticatedClient = Annotated[str, Depends(authenticate_client)]
 
 
 async def authenticate_operator(request: Request) -> str:
-    from base64 import b64decode
-
-    from .config import Settings
-
     expected = Settings().operator_api_key.get_secret_value()
     supplied = request.headers.get("X-Operator-Key", "")
     authorization = request.headers.get("Authorization", "")
@@ -79,8 +78,6 @@ OperatorIdentity = Annotated[str, Depends(authenticate_operator)]
 
 
 def require_demo_mode() -> None:
-    from .config import Settings
-
     if Settings().app_env != "development":
         raise HTTPException(
             403, "Failure laboratory requires development mode"

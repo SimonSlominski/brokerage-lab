@@ -1,7 +1,7 @@
 """Validated contracts at the partner and operational boundaries."""
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from hashlib import sha256
 from typing import Annotated, Literal
@@ -124,6 +124,4 @@ def fingerprint(payload: dict) -> str:
 
 
 def utc_now() -> datetime:
-    from datetime import timezone
-
     return datetime.now(timezone.utc)

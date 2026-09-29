@@ -2,6 +2,7 @@
 
 import argparse
 from decimal import Decimal
+from uuid import uuid4
 
 from sqlalchemy import delete, select
 from sqlalchemy.engine import Engine
@@ -18,12 +19,18 @@ from brokerage_lab.db import (
 )
 from brokerage_lab.domain import DEMO_INSTRUMENT, DEMO_UNIT_PRICE
 
+from .ledger import fund_account, post_journal
+from .models import (
+    IdempotencyRecord,
+    OrderEvent,
+    OutboxMessage,
+    ProcessedExecution,
+)
+
 DEMO_ACCOUNT_ID = "demo-account"
 
 
 def seed_demo(engine: Engine) -> None:
-    from .ledger import fund_account
-
     with Session(engine) as db, db.begin():
         if db.get(InstrumentRow, DEMO_INSTRUMENT) is None:
             db.add(
@@ -47,12 +54,6 @@ def reset_demo(engine: Engine, *, app_env: str, confirmed: bool) -> None:
         raise ValueError(
             "Demo reset requires development mode and explicit confirmation"
         )
-    from .models import (
-        IdempotencyRecord,
-        OrderEvent,
-        OutboxMessage,
-        ProcessedExecution,
-    )
 
     with Session(engine) as session, session.begin():
         account = session.scalar(
@@ -61,8 +62,6 @@ def reset_demo(engine: Engine, *, app_env: str, confirmed: bool) -> None:
             .with_for_update()
         )
         if account is None:
-            from .ledger import fund_account
-
             fund_account(session, DEMO_ACCOUNT_ID, DEMO_CLIENT_ID)
         else:
             order_ids = select(OrderRow.id).where(
@@ -88,9 +87,6 @@ def reset_demo(engine: Engine, *, app_env: str, confirmed: bool) -> None:
             session.execute(
                 delete(OrderRow).where(OrderRow.account_id == DEMO_ACCOUNT_ID)
             )
-            from uuid import uuid4
-
-            from .ledger import post_journal
 
             adjustment = Decimal("1000.00") - account.posted_cash
             if adjustment:
