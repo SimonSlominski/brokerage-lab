@@ -4,12 +4,19 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from .api_v1 import router as v1_router
 from .auth import AuthenticatedClient, DemoAuthSettings
 from .config import Settings
 from .contracts import IdempotencyKey
@@ -57,26 +64,61 @@ def create_app(engine: Engine | None = None) -> FastAPI:
         ),
     )
     app.include_router(operations_router)
+    app.include_router(v1_router)
+
+    def versioned(request):
+        return request.url.path.startswith("/v1/")
+
+    def error_response(request, status, message):
+        return JSONResponse(
+            status_code=status,
+            content={"message" if versioned(request) else "detail": message},
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error(request, exc):
+        if not versioned(request):
+            return await http_exception_handler(request, exc)
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"message": exc.detail},
+            headers=exc.headers,
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request, exc):
+        if not versioned(request):
+            return await request_validation_exception_handler(request, exc)
+        return JSONResponse(
+            status_code=422,
+            content={
+                "message": "Unprocessable Content",
+                "errors": [
+                    {"location": list(error["loc"]), "message": error["msg"]}
+                    for error in exc.errors()
+                ],
+            },
+        )
 
     @app.exception_handler(AccountNotFoundError)
     @app.exception_handler(OrderNotFoundError)
     async def missing_resource(request, exc):
-        return JSONResponse(status_code=404, content={"detail": str(exc)})
+        return error_response(request, 404, str(exc))
 
     @app.exception_handler(InsufficientFundsError)
     async def insufficient_cash(request, exc):
-        return JSONResponse(status_code=409, content={"detail": str(exc)})
+        return error_response(request, 409, str(exc))
 
     @app.exception_handler(DomainError)
     async def domain_error(request, exc):
-        return JSONResponse(status_code=422, content={"detail": str(exc)})
+        return error_response(request, 422, str(exc))
 
     @app.exception_handler(SQLAlchemyError)
     async def database_error(request, exc):
         return JSONResponse(
             status_code=503,
             content={
-                "detail": (
+                "message" if versioned(request) else "detail": (
                     "Database operation failed; order outcome may be unknown"
                 )
             },
