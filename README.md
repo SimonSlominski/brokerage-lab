@@ -46,9 +46,17 @@ Import both files in [`postman/`](postman/) and put your private keys into a loc
 
 Validated locally on 2026-09-25: **110 tests passed**, Ruff check/format passed; all five scenarios also passed through the live streaming API. Earlier Postman validation: Postman/Newman **24 requests, 41 assertions, zero failures**. GitHub Actions is configured; its remote result is pending push. Tests use disposable database schemas and independent connections for concurrency. They do not reset your demo account.
 
-[`artifacts/benchmark.json`](artifacts/benchmark.json) records a local hot-key replay measurement: 100 requests, concurrency 10, 215.91 requests/sec, p95 54.507 ms, zero errors, invariants checked. This small run is not evidence of production capacity or partner throughput.
+Presentation artifacts (PNG only, refreshed 2026-09-28):
 
-Presentation artifacts: [panel](artifacts/panel.png), [60-second recording](artifacts/demo-60s.webm), [five-minute walkthrough](artifacts/walkthrough-5min.webm). Recordings show the running application with explanatory captions and no voice-over.
+- [Panel overview](artifacts/panel.png)
+- [Lost response: funds remain reserved](artifacts/lost_response.png)
+- [20 retries: one purchase](artifacts/retry_storm.png)
+- [Worker crash: before recovery](artifacts/worker_crash.png)
+- [Duplicate execution: one accounting effect](artifacts/duplicate_execution.png)
+- [Report mismatch: investigation stays open](artifacts/amount_mismatch.png)
+
+Screenshots show the current UI and recorded checkpoints from actual local
+scenario runs. Video recordings are deferred; no recordings are included.
 
 ## Development
 
@@ -132,3 +140,15 @@ The fix includes dated ACCEPTED/REJECTED acknowledgement evidence in the local s
 This is a development MVP. Local API keys and browser Basic authentication are not a production identity system. Failure controls run only in development mode. Retry exhaustion goes to a visible error queue without releasing cash. Recovery, high availability, retention policies, production credentials/TLS, real broker integration and settlement require further design.
 
 The partner simulator demonstrates a contract; it does not establish that any real provider offers these guarantees. Existing pre-outbox demo orders are preserved rather than automatically sent. Use new panel runs for clean demonstrations. A demo reset refuses booked history; it is not an accounting eraser.
+
+## Versioned API conventions
+
+The optional `/v1` API follows documented lemon.markets conventions: Bearer keys,
+privacy audit headers, decimal strings, UTC millisecond timestamps, `message`
+errors and `data`/`pagination` list responses. Original endpoints and `X-API-Key`
+clients remain unchanged. Both versions share permanent, required idempotency
+keys, so a retry across versions cannot create another purchase.
+
+See [API conventions and deliberate differences](docs/api-conventions.md) for
+sources and a curl example. The final Postman folder exercises `/v1` using the
+account created earlier in the collection.
