@@ -1,6 +1,9 @@
 # Brokerage Lab
 
-A local failure laboratory for investment order processing: **did the partner execute the order?** It demonstrates what a local transaction can guarantee and what requires a partner contract. Synthetic EUR BUY orders only; no real trading, FX, partial fills or settlement.
+A local failure lab for one deceptively hard question: **did the execution
+partner actually execute the order?** The project shows which guarantees belong
+to the local transaction and which depend on the partner contract. It uses
+synthetic EUR buy orders only—no real trading, FX, partial fills or settlement.
 
 ## Run
 
@@ -18,7 +21,16 @@ Compose starts the API, worker, partner simulator and two PostgreSQL 17 database
 
 ## Try the failures
 
-The panel presents five visual experiments. Each creates an isolated funded account and records a run ID, seed, status and evidence. A streaming walkthrough highlights the fault and recovery on the architecture diagram, alongside observed cash, reservations and share counts. Checkpoints are paced for readability and can be paused, stepped through or replayed without submitting another order. Technical evidence and explicitly labelled IDs remain in expandable details. The trading ticket shows 8 shares × EUR 100 = EUR 800 against EUR 1,000 starting cash. **LEMON / lemon.markets** is a fictional display name for the existing `SYNTH-100` instrument, not a listed stock or real integration. The mismatch experiment has a separate report comparison ticket and submits no buy order.
+The panel contains five repeatable experiments. Every run gets a fresh funded
+account and stores its run ID, seed, status and evidence. The walkthrough marks
+the failure and recovery on the architecture diagram while showing the observed
+cash, reservation and position after each checkpoint. You can pause, step through
+or replay a completed run without placing another order.
+
+The trading scenarios buy 8 shares at EUR 100 from a EUR 1,000 account.
+**LEMON** is only the display name for the synthetic `SYNTH-100` instrument; it
+is not a listed security or a real integration. The report-mismatch scenario is
+different: it compares two controlled reports and does not submit an order.
 
 Scenarios call the partner over HTTP; the partner persists its own orders and reports.
 
@@ -44,9 +56,11 @@ make verify       # Build test container; Ruff + all tests on real PostgreSQL
 
 Import both files in [`postman/`](postman/) and put your private keys into a local Postman environment. Run the collection in order: it creates fresh scenario data and includes replay, conflicts, ownership, cash, positions and reconciliation. Never export an environment containing real keys into Git.
 
-Validated locally on 2026-09-25: **110 tests passed**, Ruff check/format passed; all five scenarios also passed through the live streaming API. Earlier Postman validation: Postman/Newman **24 requests, 41 assertions, zero failures**. GitHub Actions is configured; its remote result is pending push. Tests use disposable database schemas and independent connections for concurrency. They do not reset your demo account.
+Latest local verification (2026-09-30): **131 tests passed** on PostgreSQL;
+Ruff lint and format checks passed. The suite still reports two deprecation
+warnings from the Starlette/AnyIO test stack.
 
-Presentation artifacts (PNG only, refreshed 2026-09-28):
+Presentation artifacts (PNG only, refreshed 2026-09-30):
 
 - [Panel overview](artifacts/panel.png)
 - [Lost response: funds remain reserved](artifacts/lost_response.png)
@@ -143,7 +157,7 @@ The partner simulator demonstrates a contract; it does not establish that any re
 
 ## Versioned API conventions
 
-The optional `/v1` API follows documented lemon.markets conventions: Bearer keys,
+The optional `/v1` API follows documented LEMON conventions: Bearer keys,
 privacy audit headers, decimal strings, UTC millisecond timestamps, `message`
 errors and `data`/`pagination` list responses. Original endpoints and `X-API-Key`
 clients remain unchanged. Both versions share permanent, required idempotency

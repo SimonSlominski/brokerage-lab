@@ -803,7 +803,7 @@
       ]
     },
     {
-      "name": "25 Versioned lemon.markets conventions",
+      "name": "25 Versioned LEMON conventions",
       "description": "Run after the original walkthrough. Reuses its account and permanent idempotency key.",
       "item": [
         {

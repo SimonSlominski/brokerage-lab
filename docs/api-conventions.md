@@ -1,7 +1,7 @@
-# API conventions aligned with lemon.markets
+# API conventions aligned with LEMON
 
 Verified against the public documentation on 2026-09-28. These are public API
-conventions, not evidence of lemon.markets' internal Python style or architecture.
+conventions, not evidence of LEMON's internal Python style or architecture.
 The lab remains an independent simulator, not a compatible brokerage replacement.
 
 ## Compatibility
@@ -27,7 +27,7 @@ response is rendered in that version's format. Stored evidence is not rewritten.
 
 ## Deliberate differences
 
-- Keys remain **required and permanent**, as in the existing lab. lemon.markets
+- Keys remain **required and permanent**, as in the existing lab. LEMON
   documents optional keys and 24-hour expiry. Adopting that here could create a
   second purchase when an old request is replayed. No records are expired/deleted.
 - Whole shares only. Decimal strings such as `"8.00000"` are accepted; actual
@@ -36,7 +36,7 @@ response is rendered in that version's format. Stored evidence is not rewritten.
   an ISIN. Existing local IDs/status transitions are not renamed into broker IDs.
 - Partner-simulator HTTP contracts and operator endpoints retain their original
   formats. They are internal lab interfaces, not the public `/v1` contract.
-- SCA/WebAuthn, webhooks and a real lemon.markets client are separate features.
+- SCA/WebAuthn, webhooks and a real LEMON client are separate features.
   Bearer authentication here still uses configured local demo credentials.
 - Public documentation examples sometimes contain microseconds, while the
   date/time guide specifies milliseconds. The new API follows the guide for
