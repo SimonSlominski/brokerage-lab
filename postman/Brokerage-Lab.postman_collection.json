@@ -801,6 +801,216 @@
           }
         }
       ]
+    },
+    {
+      "name": "25 Versioned lemon.markets conventions",
+      "description": "Run after the original walkthrough. Reuses its account and permanent idempotency key.",
+      "item": [
+        {
+          "name": "Cash uses fixed decimal strings",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{client_key}}"
+              },
+              {
+                "key": "LMG-Data-Privacy-Access-Principal",
+                "value": "backend-demo-client"
+              },
+              {
+                "key": "LMG-Data-Privacy-Access-Justification",
+                "value": "app_usage-contract-check"
+              }
+            ],
+            "url": "{{base_url}}/v1/accounts/{{account_id}}/cash"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Cash precision\", () => pm.expect(pm.response.json().posted_cash).to.eql(\"200.00\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Order uses price and quantity precision",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{client_key}}"
+              },
+              {
+                "key": "LMG-Data-Privacy-Access-Principal",
+                "value": "backend-demo-client"
+              },
+              {
+                "key": "LMG-Data-Privacy-Access-Justification",
+                "value": "app_usage-contract-check"
+              }
+            ],
+            "url": "{{base_url}}/v1/orders/{{order_id}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const order = pm.response.json();",
+                  "pm.test(\"Wire formats\", () => { pm.expect(order.quantity).to.eql(\"8.00000\"); pm.expect(order.unit_price).to.eql(\"100.0000\"); pm.expect(order.side).to.eql(\"buy\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-version replay creates no second purchase",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{client_key}}"
+              },
+              {
+                "key": "LMG-Data-Privacy-Access-Principal",
+                "value": "backend-demo-client"
+              },
+              {
+                "key": "LMG-Data-Privacy-Access-Justification",
+                "value": "app_usage-contract-check"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{request_key}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{base_url}}/v1/accounts/{{account_id}}/orders",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"quantity\": \"8.00000\", \"side\": \"buy\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+                  "pm.test(\"Same order\", () => pm.expect(pm.response.json().order_id).to.eql(pm.collectionVariables.get(\"order_id\")));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Positions use data and pagination",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{client_key}}"
+              },
+              {
+                "key": "LMG-Data-Privacy-Access-Principal",
+                "value": "backend-demo-client"
+              },
+              {
+                "key": "LMG-Data-Privacy-Access-Justification",
+                "value": "app_usage-contract-check"
+              }
+            ],
+            "url": "{{base_url}}/v1/accounts/{{account_id}}/positions?limit=1"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "const page = pm.response.json();",
+                  "pm.test(\"One position\", () => { pm.expect(page.data).to.have.lengthOf(1); pm.expect(page.data[0].quantity).to.eql(\"8.00000\"); pm.expect(page.pagination.next_cursor).to.eql(null); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Timeline uses data and pagination",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{client_key}}"
+              },
+              {
+                "key": "LMG-Data-Privacy-Access-Principal",
+                "value": "backend-demo-client"
+              },
+              {
+                "key": "LMG-Data-Privacy-Access-Justification",
+                "value": "app_usage-contract-check"
+              }
+            ],
+            "url": "{{base_url}}/v1/orders/{{order_id}}/timeline"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"History envelope\", () => { pm.expect(pm.response.json().data).to.be.an(\"array\").that.is.not.empty; pm.expect(pm.response.json().pagination.next_cursor).to.eql(null); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing Bearer has message error",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/v1/demo/account"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));",
+                  "pm.test(\"Message error\", () => { pm.expect(pm.response.json()).to.have.property(\"message\"); pm.expect(pm.response.json()).not.to.have.property(\"detail\"); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
     }
   ]
 }
