@@ -93,7 +93,13 @@ def cash_from_ledger(db: Session, account_id: str) -> Decimal:
     return Money(amount=Decimal(db.scalar(stmt))).amount
 
 
-def positions(db: Session, account_id: str) -> list[dict]:
+def positions(
+    db: Session,
+    account_id: str,
+    *,
+    after: str | None = None,
+    limit: int | None = None,
+) -> list[dict]:
     stmt = (
         select(
             InstrumentMovement.instrument,
@@ -101,7 +107,12 @@ def positions(db: Session, account_id: str) -> list[dict]:
         )
         .where(InstrumentMovement.account_id == account_id)
         .group_by(InstrumentMovement.instrument)
+        .order_by(InstrumentMovement.instrument)
     )
+    if after is not None:
+        stmt = stmt.where(InstrumentMovement.instrument > after)
+    if limit is not None:
+        stmt = stmt.limit(limit)
     return [
         dict(instrument=instrument, quantity=quantity)
         for instrument, quantity in db.execute(stmt)

@@ -143,7 +143,7 @@ def order_timeline(
         }
 
 
-def position_page(rows, account_id, cursor, limit):
+def decode_position_cursor(cursor, account_id):
     after = ""
     if cursor:
         try:
@@ -159,6 +159,11 @@ def position_page(rows, account_id, cursor, limit):
             after = token["after"]
         except (ValueError, TypeError, UnicodeError, binascii.Error):
             raise HTTPException(400, "Invalid pagination cursor") from None
+    return after
+
+
+def position_page(rows, account_id, cursor, limit):
+    after = decode_position_cursor(cursor, account_id)
     remaining = sorted(
         (row for row in rows if row["instrument"] > after),
         key=lambda row: row["instrument"],
@@ -192,9 +197,13 @@ def account_positions(
     cursor: Annotated[str | None, Query(max_length=1024)] = None,
 ):
     owned_account(request.app.state.engine, account_id, client_id)
+    after = decode_position_cursor(cursor, account_id)
     with Session(request.app.state.engine) as db:
         return position_page(
-            positions(db, account_id), account_id, cursor, limit
+            positions(db, account_id, after=after, limit=limit + 1),
+            account_id,
+            cursor,
+            limit,
         )
 
 

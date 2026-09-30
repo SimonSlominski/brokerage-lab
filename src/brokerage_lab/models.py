@@ -9,11 +9,13 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -41,6 +43,20 @@ class OutboxMessage(Base):
         CheckConstraint(
             "status IN ('PENDING','CLAIMED','DONE','ERROR')",
             name="ck_outbox_status",
+        ),
+        Index(
+            "ix_outbox_pending_claim",
+            "run_id",
+            "available_at",
+            "created_at",
+            postgresql_where=text("status = 'PENDING'"),
+        ),
+        Index(
+            "ix_outbox_expired_claim",
+            "run_id",
+            "lease_until",
+            "created_at",
+            postgresql_where=text("status = 'CLAIMED'"),
         ),
     )
     id: Mapped[str] = mapped_column(String(100), primary_key=True)
