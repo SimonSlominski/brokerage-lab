@@ -80,6 +80,46 @@ def test_stream_disabled_outside_development(monkeypatch):
         assert response.status_code == 403
 
 
+@pytest.mark.parametrize(
+    ("path", "json"),
+    [
+        ("/reconciliation-breaks/example/recover", None),
+        ("/journal/example/reverse", {"reason": "local test"}),
+    ],
+)
+def test_operator_money_mutations_disabled_outside_development(
+    monkeypatch, path, json
+):
+    monkeypatch.setenv("APP_ENV", "production")
+    with TestClient(create_app(engine=MagicMock())) as client:
+        response = client.post(
+            path,
+            json=json,
+            headers={"X-Operator-Key": "test-operator-key"},
+        )
+        assert response.status_code == 403
+
+
+def test_only_one_failure_scenario_can_run_at_a_time(monkeypatch):
+    from brokerage_lab.operations import scenario_slot
+
+    monkeypatch.setenv("APP_ENV", "development")
+    assert scenario_slot.acquire(blocking=False)
+    try:
+        with TestClient(create_app(engine=MagicMock())) as client:
+            response = client.post(
+                "/lab/runs",
+                json={"scenario": "lost_response"},
+                headers={"X-Operator-Key": "test-operator-key"},
+            )
+        assert response.status_code == 409
+        assert response.json()["detail"] == (
+            "Another failure scenario is already running"
+        )
+    finally:
+        scenario_slot.release()
+
+
 @pytest.mark.postgres
 @pytest.mark.parametrize(
     "scenario",

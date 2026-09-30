@@ -54,7 +54,8 @@ def authenticate(
 ) -> str:
     # Audit claims cannot change the identity or account ownership.
     logger.info(
-        "api_access client_id=%s principal=%s justification=%s "
+        "api_access authenticated_client_id=%s claimed_principal=%s "
+        "claimed_justification=%s "
         "method=%s path=%s",
         client_id,
         principal,

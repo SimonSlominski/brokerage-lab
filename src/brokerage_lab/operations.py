@@ -1,8 +1,10 @@
 """Operator-only recovery and observations; failure controls are local-only."""
 
 import json
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from queue import Queue
+from threading import Lock
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -34,6 +36,13 @@ from .scenarios import execute_scenario
 from .transport import partner_transport
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+scenario_slot = Lock()
+
+
+def acquire_scenario_slot() -> None:
+    if not scenario_slot.acquire(blocking=False):
+        raise HTTPException(409, "Another failure scenario is already running")
 
 
 def metrics(db: Session) -> dict:
@@ -94,6 +103,7 @@ def read_metrics(request: Request, operator: OperatorIdentity):
 def execution_received(
     payload: Execution, request: Request, operator: OperatorIdentity
 ):
+    require_demo_mode()
     with Session(request.app.state.engine) as db, db.begin():
         transaction_id = book_execution(db, payload)
     return {"journal_transaction_id": transaction_id}
@@ -172,6 +182,7 @@ def break_history(break_id: str, request: Request, operator: OperatorIdentity):
 
 @router.post("/reconciliation-breaks/{break_id}/recover")
 def recover(break_id: str, request: Request, operator: OperatorIdentity):
+    require_demo_mode()
     transport = partner_transport()
     try:
         result = recover_break(
@@ -189,6 +200,7 @@ def reverse(
     request: Request,
     operator: OperatorIdentity,
 ):
+    require_demo_mode()
     with Session(request.app.state.engine) as db, db.begin():
         result = reverse_journal(db, transaction_id, payload.reason)
     return {"correction_id": result}
@@ -199,9 +211,13 @@ def run_scenario(
     payload: ScenarioCreate, request: Request, operator: OperatorIdentity
 ):
     require_demo_mode()
-    return execute_scenario(
-        request.app.state.engine, payload.scenario, payload.seed
-    )
+    acquire_scenario_slot()
+    try:
+        return execute_scenario(
+            request.app.state.engine, payload.scenario, payload.seed
+        )
+    finally:
+        scenario_slot.release()
 
 
 @router.post("/lab/runs/stream")
@@ -209,6 +225,7 @@ def stream_scenario(
     payload: ScenarioCreate, request: Request, operator: OperatorIdentity
 ):
     require_demo_mode()
+    acquire_scenario_slot()
     engine = request.app.state.engine
 
     def stream():
@@ -224,6 +241,9 @@ def stream_scenario(
                 )
                 events.put(dict(type="result", result=result))
             except Exception:
+                logger.exception(
+                    "scenario_stream_failed scenario=%s", payload.scenario
+                )
                 events.put(
                     dict(
                         type="error",
@@ -231,6 +251,7 @@ def stream_scenario(
                     )
                 )
             finally:
+                scenario_slot.release()
                 events.put(None)
 
         # Finish and persist the run even if the browser disconnects.
