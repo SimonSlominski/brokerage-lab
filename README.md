@@ -153,6 +153,28 @@ The fix includes dated ACCEPTED/REJECTED acknowledgement evidence in the local s
 
 This is a development MVP. Local API keys and browser Basic authentication are not a production identity system. Failure controls run only in development mode. Retry exhaustion goes to a visible error queue without releasing cash. Recovery, high availability, retention policies, production credentials/TLS, real broker integration and settlement require further design.
 
+### Production hardening intentionally left out
+
+The repository is designed to run locally through Docker Compose and to make
+failure behaviour easy to inspect. It is not a deployable brokerage service.
+The following work is deliberately outside this MVP:
+
+- Replace the shared operator credential with individual identities, roles and
+  immutable audit records. Execution callbacks would use a separate service
+  identity plus signed webhooks or mutual TLS. The current mutation and failure
+  endpoints are blocked outside development mode.
+- Treat the privacy principal and justification headers as client-supplied
+  context, not authenticated identity. Logs label them as claimed values.
+- Process partner reports and reconciliation in bounded pages with durable
+  checkpoints instead of loading a full report into one request and transaction.
+- Define retention and archival for scenario evidence, idempotency records,
+  outbox history and reports. The local demo intentionally keeps its evidence.
+- Add production SLOs, rate limits, distributed coordination, tracing and alerting.
+- Extend CI with dependency and container vulnerability scanning, secret
+  scanning, an SBOM and signed release artifacts. The MVP pins dependencies and
+  runs lint, migrations and PostgreSQL-backed tests, but that is not a complete
+  software-supply-chain control set.
+
 The partner simulator demonstrates a contract; it does not establish that any real provider offers these guarantees. Existing pre-outbox demo orders are preserved rather than automatically sent. Use new panel runs for clean demonstrations. A demo reset refuses booked history; it is not an accounting eraser.
 
 ## Versioned API conventions
