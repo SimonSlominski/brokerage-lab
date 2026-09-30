@@ -96,7 +96,7 @@ and does not submit an order.
 
 ![Failure laboratory overview](artifacts/panel.png)
 
-Watch the [50-second failure scenario demo](artifacts/brokerage-lab-demo.mp4).
+Watch the [recorded failure laboratory walkthrough](artifacts/DemoLab.mov).
 
 Additional evidence:
 [lost response](artifacts/lost_response.png),
