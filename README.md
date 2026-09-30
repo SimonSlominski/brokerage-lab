@@ -1,190 +1,254 @@
 # Brokerage Lab
 
-A local failure lab for one deceptively hard question: **did the execution
-partner actually execute the order?** The project shows which guarantees belong
-to the local transaction and which depend on the partner contract. It uses
-synthetic EUR buy orders only—no real trading, FX, partial fills or settlement.
+Brokerage Lab is a local reliability demo for investment-order processing. It
+focuses on a deceptively difficult question:
 
-## Run
+> Did the execution partner process the order, and can the local system prove
+> what happened without charging the client twice?
 
-```bash
-docker compose up --build
-```
+The project demonstrates durable idempotency, atomic cash reservation, an
+outbox worker, explicit handling of unknown remote outcomes, execution
+deduplication, append-only accounting and evidence-based reconciliation.
 
-Docker Desktop and a private `.env` are required. The existing local `.env` is ready; a new clone needs the values described in `.env.example` once. Compose reads them automatically. There is no host Python or manual migration step.
+It is an engineering MVP built for local exploration. It does not connect to a
+broker or process real money.
 
-- [Operator panel](http://127.0.0.1:8000/lab): browser login `operator`, password `OPERATOR_API_KEY` from `.env`.
-- [Swagger](http://127.0.0.1:8000/docs): client requests use `X-API-Key`; operator requests use `X-Operator-Key`.
-- `/health/live` checks the API process; `/health/ready` checks local database access. Neither promises that the partner is available.
+## What the project demonstrates
 
-Compose starts the API, worker, partner simulator and two PostgreSQL 17 databases. A separate migration job applies local Alembic migrations and seeds missing accounts before API/worker startup. The partner applies its own migrations. Existing balances and history survive restart. `docker compose down` stops the stack without deleting volumes.
+- **Atomic order intake.** The order, cash reservation, idempotency result and
+  outbox message commit in one PostgreSQL transaction.
+- **Safe retries.** Repeating the same client intention returns the original
+  result; changing the payload under the same key produces a visible conflict.
+- **At-least-once delivery.** Workers use short database leases and never keep a
+  transaction open during partner HTTP calls.
+- **Explicit uncertainty.** A timeout produces `UNKNOWN`, not `REJECTED`, and
+  reserved cash remains protected until evidence resolves the outcome.
+- **Exactly-once local accounting effects.** Duplicate execution notifications
+  converge on one journal transaction and one instrument movement.
+- **Auditable cash history.** EUR cash entries are balanced and append-only;
+  corrections create linked reversing entries instead of rewriting history.
+- **Evidence-based reconciliation.** Report differences open investigation
+  cases but never change cash without confirmed execution evidence.
 
-## Try the failures
-
-The panel contains five repeatable experiments. Every run gets a fresh funded
-account and stores its run ID, seed, status and evidence. The walkthrough marks
-the failure and recovery on the architecture diagram while showing the observed
-cash, reservation and position after each checkpoint. You can pause, step through
-or replay a completed run without placing another order.
-
-The trading scenarios buy 8 shares at EUR 100 from a EUR 1,000 account.
-**LEMON** is only the display name for the synthetic `SYNTH-100` instrument; it
-is not a listed security or a real integration. The report-mismatch scenario is
-different: it compares two controlled reports and does not submit an order.
-
-Scenarios call the partner over HTTP; the partner persists its own orders and reports.
-
-| Scenario | Expected evidence |
-|---|---|
-| Lost response | UNKNOWN retains 800 EUR; lookup resolves one execution; final cash 200, reservation 0 |
-| 20 retries | One client/key produces one order and reservation despite concurrent requests |
-| Worker crash | A real subprocess exits after remote commit; lease expiry and lookup recover the same execution |
-| 10 executions | Concurrent delivery produces one journal transaction and instrument movement |
-| 975 / 950 mismatch | Explicit report fixture creates an OPEN amount discrepancy; cash remains unchanged |
-
-The mismatch is a **controlled report fixture**, not a possible quantity at the fixed 100 EUR unit price. FAILED runs remain visible. Metrics come from database rows, not scripted success counters. Missing-record metrics count unresolved cases and can include repeated reports.
-
-For individual orders, submit `POST /demo/orders` with `{"quantity":8}`, `X-API-Key` and a new `Idempotency-Key`. A new account starts with 1000 EUR. Reservation gives 1000 posted / 800 reserved / 200 available; execution gives 200 / 0 / 200. The background worker may finish before your next read.
-
-Same client/key and normalized payload replays the original 201 response, even after execution. Read the returned order URL for current state. Changed payload under that key returns 422. Different keys mean distinct intentions. Keys have no automatic expiry in this MVP. Foreign accounts return 404; missing credentials return 401.
-
-## Verify
-
-```bash
-make verify       # Build test container; Ruff + all tests on real PostgreSQL
-```
-
-Import both files in [`postman/`](postman/) and put your private keys into a local Postman environment. Run the collection in order: it creates fresh scenario data and includes replay, conflicts, ownership, cash, positions and reconciliation. Never export an environment containing real keys into Git.
-
-Latest local verification (2026-09-30): **131 tests passed** on PostgreSQL;
-Ruff lint and format checks passed. The suite still reports two deprecation
-warnings from the Starlette/AnyIO test stack.
-
-Presentation artifacts (PNG only, refreshed 2026-09-30):
-
-- [Panel overview](artifacts/panel.png)
-- [Lost response: funds remain reserved](artifacts/lost_response.png)
-- [20 retries: one purchase](artifacts/retry_storm.png)
-- [Worker crash: before recovery](artifacts/worker_crash.png)
-- [Duplicate execution: one accounting effect](artifacts/duplicate_execution.png)
-- [Report mismatch: investigation stays open](artifacts/amount_mismatch.png)
-
-Screenshots show the current UI and recorded checkpoints from actual local
-scenario runs. Video recordings are deferred; no recordings are included.
-
-## Development
-
-Optional PyCharm interpreter: `.venv/bin/python`. `make setup` installs the package and development dependencies. Run from the repository root:
-
-```bash
-make format       # Ruff format, then Ruff check --fix
-make lint         # Check without modifying files
-make verify-local # Full PostgreSQL tests using your local environment
-make benchmark    # Live HTTP replay measurement; requires running stack
-```
-
-Ruff follows the reference service's E/F/I rule families, double quotes and four-space indentation, with the requested **79 columns** (the reference used 95). Ruff cannot automatically shorten every string. `requirements/base.txt` contains runtime dependencies; `dev.txt` adds tooling. `pyproject.toml` packages the application and configures pytest.
-
-API source edits reload through the Compose mount. Rebuild to update worker/partner code or dependencies. For a schema change, use the local admin connection: `.venv/bin/alembic revision --autogenerate -m "Describe change"`, review the generated migration, then restart with `docker compose up --build`. The runtime API role deliberately cannot modify schema or accounting history. Partner migrations use `partner-alembic.ini` and its separate database. Never point that configuration at the local application database.
-
-## Design and guarantees
+## Architecture
 
 ```mermaid
 flowchart LR
-    Client -->|intention + idempotency key| Lab[Brokerage Lab]
-    Operator -->|inspect and recover| Lab
-    Lab -->|stable client_order_id| Partner[Execution partner]
-    Partner -->|result and report| Lab
+    Client[Client] -->|order + idempotency key| API[FastAPI]
+    Operator[Operator] --> Panel[Failure lab]
+    Panel --> API
+
+    subgraph Local system
+        API --> DB[(PostgreSQL)]
+        Worker[Outbox worker] --> DB
+        Reconciliation --> DB
+    end
+
+    Worker -->|stable client_order_id| Partner[Partner simulator API]
+    Partner --> PartnerDB[(Partner PostgreSQL)]
+    Reconciliation -->|reports and lookup| Partner
 ```
 
-```mermaid
-flowchart LR
-    API[FastAPI + operator panel] --> DB[(Local PostgreSQL)]
-    Worker -->|claim / acknowledge| DB
-    Worker -->|HTTP outside DB transaction| Partner[Partner FastAPI]
-    Partner --> PDB[(Partner PostgreSQL)]
-    Reconciliation -->|HTTP report / lookup| Partner
-    Reconciliation --> DB
-```
+The application and partner simulator own separate databases and communicate
+only over HTTP. No transaction spans both systems.
+
+### Lost-response recovery
 
 ```mermaid
 sequenceDiagram
+    participant A as Application API
+    participant D as Local PostgreSQL
     participant W as Worker
-    participant D as Local DB
-    participant P as Partner
-    W->>D: Claim outbox message; commit lease
+    participant P as Partner API
+
+    A->>D: Commit order, reservation, idempotency and outbox
+    W->>D: Claim message and commit lease
     W->>P: Submit stable client_order_id
-    P->>P: Commit deduplicated execution
-    P--xW: Response lost
-    W->>D: UNKNOWN; retain reservation
+    P->>P: Persist one execution
+    P--xW: Response is lost
+    W->>D: Record UNKNOWN; keep reservation
     W->>P: Lookup original client_order_id
-    P-->>W: Existing execution
-    W->>D: Atomic dedup + ledger + position + release + status
+    P-->>W: Return existing execution
+    W->>D: Atomically book cash, position and final status
 ```
 
-| Module | Responsibility |
+The local database can guarantee atomic local state. It cannot roll back a
+remote execution. Safe recovery therefore depends on a stable client order ID,
+partner-side deduplication and lookup by that identifier.
+
+## Failure laboratory
+
+The web panel runs five repeatable experiments against real local services and
+persisted database state. Every run receives a fresh account funded with
+EUR 1,000 and stores its checkpoints for later inspection.
+
+| Scenario | Expected result |
 |---|---|
-| `domain.py`, `contracts.py`, `schemas.py` | Pydantic values, transitions and boundary validation |
-| `services.py`, `repositories.py`, `unit_of_work.py` | Account locking, idempotency and explicit transaction ownership |
-| `db.py`, `models.py`, `ledger.py`, `executions.py` | ORM, immutable balanced history, cash projection and execution deduplication |
-| `worker.py`, `transport.py`, `partner.py` | Leased outbox delivery and durable remote simulator |
-| `reconciliation.py`, `operations.py` | Cutoff-aware comparison, investigation and evidence-based recovery |
-| `scenarios.py`, `panel.py` | Repeatable failure demonstrations and persisted observations |
+| Lost response | The order becomes `UNKNOWN`; EUR 800 remains reserved; lookup recovers one execution |
+| Concurrent retries | Twenty submissions with one idempotency key create one order and one reservation |
+| Worker crash | A subprocess exits after the partner commit; lease expiry and lookup recover the same execution |
+| Duplicate execution | Ten concurrent deliveries produce one journal transaction and one position movement |
+| Report mismatch | A EUR 975 / EUR 950 difference opens an investigation without changing cash |
 
-<details><summary>Five architecture decisions</summary>
+The four trading scenarios use a fictional `SYNTH-100` instrument displayed as
+**LEMON** in the panel. The mismatch scenario uses controlled report fixtures
+and does not submit an order.
 
-1. **Pydantic domain, separate SQLAlchemy persistence.** Domain operations return validated new state. Boundary schemas validate input; domain operations enforce business rules. This retains familiar models without making ORM rows the public contract.
-2. **Explicit service transaction and small repositories.** One service owns commit; repositories flush only. A unit of work rolls back on exit without commit. This makes the multi-table order/reservation/idempotency/outbox boundary visible. It is a pragmatic separation, not a framework requirement; ordinary CRUD remains suitable for simple independent updates.
-3. **At-least-once delivery with leased outbox.** Order and delivery intent commit together. Network calls happen outside local transactions. Lease tokens reject stale acknowledgements. Remote retries need stable identity, durable deduplication and lookup; a local DB cannot enforce remote exactly-once behavior.
-4. **Append-only double-entry cash history.** Every journal balances EUR against a clearing bucket; units live in a separate register. Execution identity and all effects commit together. Corrections append linked opposite effects; originals remain unchanged. Constraints, triggers and restricted runtime grants protect history, not against database administrators.
-5. **Evidence-driven reconciliation and explicit uncertainty.** Compare five discrepancy categories at the report cutoff. Missing local executions can be recovered through validated partner lookup and normal booking. A mismatch alone cannot repair cash. UNKNOWN and exhausted retries retain reservations; operator attention is required.
+![Failure laboratory overview](artifacts/panel.png)
 
-</details>
+Additional evidence:
+[lost response](artifacts/lost_response.png),
+[concurrent retries](artifacts/retry_storm.png),
+[worker crash](artifacts/worker_crash.png),
+[duplicate execution](artifacts/duplicate_execution.png), and
+[report mismatch](artifacts/amount_mismatch.png).
 
-<details><summary>Postmortem: rejected orders incorrectly appeared missing</summary>
+## Run locally
 
-During implementation review, the local reconciliation snapshot contained only booked executions, while the partner report also included confirmed rejected orders. This mismatch in record selection would classify a known rejection as MISSING_LOCAL. No production system or real funds were involved.
+### Requirements
 
-The fix includes dated ACCEPTED/REJECTED acknowledgement evidence in the local snapshot and reconstructs state at the cutoff even if a fill arrived later. Recovery also rejects contradictory ACCEPTED/REJECTED responses carrying execution data. `test_confirmed_rejection_is_not_missing_execution` now submits a rejection through the partner HTTP path and asserts an empty discrepancy set. Pure comparison tests alone could not establish that the report inputs represented the same population.
+- Docker Desktop with Docker Compose
+- a local `.env` created from [`.env.example`](.env.example)
 
-</details>
+### Start the stack
 
-## Boundaries
+```bash
+cp .env.example .env
+# Replace every placeholder in .env with a private local value.
+docker compose up --build
+```
 
-This is a development MVP. Local API keys and browser Basic authentication are not a production identity system. Failure controls run only in development mode. Retry exhaustion goes to a visible error queue without releasing cash. Recovery, high availability, retention policies, production credentials/TLS, real broker integration and settlement require further design.
+Compose starts the application API, operator panel, outbox worker, independent
+partner simulator, separate PostgreSQL databases and a one-shot migration job.
 
-### Production hardening intentionally left out
+Open:
 
-The repository is designed to run locally through Docker Compose and to make
-failure behaviour easy to inspect. It is not a deployable brokerage service.
-The following work is deliberately outside this MVP:
+- [Failure laboratory](http://127.0.0.1:8000/lab) — username `operator`,
+  password from `OPERATOR_API_KEY`;
+- [OpenAPI documentation](http://127.0.0.1:8000/docs).
 
-- Replace the shared operator credential with individual identities, roles and
-  immutable audit records. Execution callbacks would use a separate service
-  identity plus signed webhooks or mutual TLS. The current mutation and failure
-  endpoints are blocked outside development mode.
-- Treat the privacy principal and justification headers as client-supplied
-  context, not authenticated identity. Logs label them as claimed values.
-- Process partner reports and reconciliation in bounded pages with durable
-  checkpoints instead of loading a full report into one request and transaction.
-- Define retention and archival for scenario evidence, idempotency records,
-  outbox history and reports. The local demo intentionally keeps its evidence.
-- Add production SLOs, rate limits, distributed coordination, tracing and alerting.
-- Extend CI with dependency and container vulnerability scanning, secret
-  scanning, an SBOM and signed release artifacts. The MVP pins dependencies and
-  runs lint, migrations and PostgreSQL-backed tests, but that is not a complete
-  software-supply-chain control set.
+Stop the stack without removing its volumes:
 
-The partner simulator demonstrates a contract; it does not establish that any real provider offers these guarantees. Existing pre-outbox demo orders are preserved rather than automatically sent. Use new panel runs for clean demonstrations. A demo reset refuses booked history; it is not an accounting eraser.
+```bash
+docker compose down
+```
 
-## Versioned API conventions
+## API example
 
-The optional `/v1` API follows documented LEMON conventions: Bearer keys,
-privacy audit headers, decimal strings, UTC millisecond timestamps, `message`
-errors and `data`/`pagination` list responses. Original endpoints and `X-API-Key`
-clients remain unchanged. Both versions share permanent, required idempotency
-keys, so a retry across versions cannot create another purchase.
+Create a synthetic order with a new idempotency key:
 
-See [API conventions and deliberate differences](docs/api-conventions.md) for
-sources and a curl example. The final Postman folder exercises `/v1` using the
-account created earlier in the collection.
+```bash
+curl -X POST http://127.0.0.1:8000/demo/orders \
+  -H "X-API-Key: $DEMO_API_KEY" \
+  -H "Idempotency-Key: example-order-1" \
+  -H "Content-Type: application/json" \
+  -d '{"quantity": 8}'
+```
+
+Submitting the same normalized payload with the same client and key replays the
+original response. Reusing the key with a different payload returns `422` and
+creates no additional financial effects.
+
+The optional `/v1` surface demonstrates selected public API conventions such as
+Bearer authentication, decimal strings, UTC timestamps and cursor pagination.
+It shares the same durable order and idempotency records as the original demo
+API. See [API conventions](docs/api-conventions.md) for deliberate differences.
+
+## Verification
+
+```bash
+make verify
+```
+
+The command builds an isolated test image, checks formatting and linting, and
+runs the complete PostgreSQL-backed suite. Coverage includes concurrent order
+submission, idempotent replay, transaction rollback, worker leases, lost
+responses, process crashes, execution deduplication, accounting invariants,
+authorization boundaries and reconciliation cutoffs.
+
+The Postman collection in [`postman/`](postman/) provides an additional HTTP
+walkthrough. Keep credentials in a private Postman environment; do not commit
+exported secrets.
+
+## Design decisions
+
+### Domain and persistence are separate
+
+Pydantic models enforce values and state transitions. SQLAlchemy models handle
+persistence. This keeps HTTP and database concerns out of the domain rules while
+retaining explicit mapping between layers.
+
+### Services own transaction boundaries
+
+Application services decide when to commit. Repositories flush but do not
+commit, and the Unit of Work rolls back by default. Multi-table financial
+effects therefore have one visible transaction owner.
+
+### Delivery is at least once
+
+The outbox worker claims work in a short transaction, calls the partner outside
+the transaction, and acknowledges only with the active lease token. Duplicate
+delivery is expected and handled through stable identities and idempotent local
+booking.
+
+### Accounting history is append-only
+
+Every cash journal contains two balanced EUR entries. Instrument units live in
+a separate register. Database constraints, deferred triggers and restricted
+runtime grants protect committed history from application-role updates and
+deletes.
+
+### Reconciliation does not invent evidence
+
+The reconciler compares records at a compatible cutoff and records missing,
+duplicate, amount and status differences. It can recover a missing local
+execution only after partner lookup returns identified `FILLED` evidence.
+
+## Project structure
+
+| Area | Main modules |
+|---|---|
+| API and authentication | `api.py`, `api_v1.py`, `auth.py`, `auth_v1.py` |
+| Domain and contracts | `domain.py`, `contracts.py`, `schemas.py` |
+| Transactions and persistence | `services.py`, `repositories.py`, `unit_of_work.py`, `models.py` |
+| Accounting | `ledger.py`, `executions.py` |
+| Delivery and partner boundary | `worker.py`, `transport.py`, `partner.py` |
+| Reconciliation and operations | `reconciliation.py`, `operations.py` |
+| Demonstration UI | `scenarios.py`, `panel.py`, `templates/lab.html` |
+
+## Scope and limitations
+
+This repository is a local engineering demonstration, not a production
+brokerage service. It intentionally supports one synthetic EUR instrument,
+whole-unit BUY orders and full execution or definitive rejection. It excludes
+real market connectivity, FX, partial fills, settlement, taxes, KYC, corporate
+actions and production deployment.
+
+Production hardening would additionally require:
+
+- individual operator identities, RBAC and immutable security audit records;
+- a separate service identity with signed webhooks or mutual TLS for execution
+  callbacks;
+- bounded report pagination and checkpointed reconciliation;
+- retention, archival and privacy policies for operational evidence;
+- production SLOs, distributed rate limiting, tracing and alerting;
+- dependency, secret and container scanning, an SBOM and signed artifacts;
+- high-availability deployment and disaster-recovery procedures.
+
+Failure injection and money-changing operator endpoints are blocked outside
+development mode. Privacy principal and justification headers are recorded as
+client-supplied claims, not as authenticated identity.
+
+## Development
+
+```bash
+make setup        # Create a local virtual environment and install dev tools
+make format       # Format and apply safe lint fixes
+make lint         # Check formatting and lint rules
+make verify-local # Run the PostgreSQL-backed suite from the local environment
+make benchmark    # Measure replay latency against a running local stack
+```
+
+For schema changes, generate and review an Alembic migration before restarting
+the stack. Application and partner schemas use separate Alembic configurations
+and separate databases.
