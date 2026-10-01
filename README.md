@@ -96,7 +96,11 @@ and does not submit an order.
 
 ![Failure laboratory overview](artifacts/panel.png)
 
-Watch the [recorded failure laboratory walkthrough](artifacts/DemoLab.mov).
+### Video walkthrough
+
+[![Watch the Brokerage Lab demo on YouTube](https://img.youtube.com/vi/A1SW4_C3jbg/hqdefault.jpg)](https://youtu.be/A1SW4_C3jbg)
+
+[▶ Watch the failure laboratory walkthrough on YouTube](https://youtu.be/A1SW4_C3jbg)
 
 Additional evidence:
 [lost response](artifacts/lost_response.png),
