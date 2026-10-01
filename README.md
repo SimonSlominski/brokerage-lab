@@ -1,5 +1,7 @@
 # Brokerage Lab
 
+[![Verify](https://github.com/SimonSlominski/brokerage-lab/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/SimonSlominski/brokerage-lab/actions/workflows/ci.yml?query=branch%3Amain)
+
 Brokerage Lab is a local reliability demo for investment-order processing. It
 focuses on a deceptively difficult question:
 
